@@ -34,7 +34,6 @@ import {
   createSquad,
   updateSquad,
   deleteSquad,
-  getAllPbChannelIds,
 } from './database';
 
 import {
@@ -117,6 +116,7 @@ async function onJoinChannel(state: VoiceState, client: BublikClient): Promise<v
     if (squad.airChannelId) cancelDeleteTimer(squad.airChannelId);
 
     // Ротация ролей
+    log.debug(`Ротация ролей (вход в ПБ-канал): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
     await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
 
     // Обновить панель (счётчик)
@@ -143,6 +143,15 @@ async function handleMasterJoin(
 
   if (!isCommander) {
     await member.voice.disconnect('Нет роли полевого командира').catch(() => null);
+    return;
+  }
+
+  // Проверка: у пользователя уже есть активный отряд?
+  const existingSquads = await getGuildSquads(state.guild.id);
+  const alreadyOwns = existingSquads.find((s: any) => s.ownerId === member.id);
+  if (alreadyOwns) {
+    await member.voice.disconnect('У вас уже есть активный отряд').catch(() => null);
+    log.info(`Отклонено: ${member.user.tag} уже владеет отрядом ${alreadyOwns.number}`);
     return;
   }
 
@@ -202,6 +211,7 @@ async function handleMasterJoin(
     await member.voice.setChannel(vc, 'Создание отряда ПБ').catch(() => null);
 
     // Ротация ролей для командира
+    log.debug(`Ротация ролей (командир): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
     await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
 
     setCreationCooldown(member.id);
@@ -336,6 +346,7 @@ async function onLeaveChannel(state: VoiceState, client: BublikClient): Promise<
     const otherSquad = newChannelId ? await getSquadByAnyVoice(newChannelId) : null;
     if (!otherSquad) {
       // Полностью покинул ПБ → восстановить роли
+      log.debug(`Восстановление ролей (выход из ПБ): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
       await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
     }
     // Если перешёл в другой отряд — роли сохраняются (inSquadRole)
@@ -515,37 +526,66 @@ export function stopRoleIntegrityChecker(): void {
 }
 
 /**
- * Проверить: нет ли людей с inSquadRole вне ПБ-каналов.
- * Если такие есть — восстановить им pingRole и снять inSquadRole.
+ * Проверка целостности ролей:
+ * 1. Каждому в ПБ-войсе — выдать inSquadRole, снять pingRole
+ * 2. Каждому с inSquadRole НЕ в ПБ-войсе — вернуть pingRole, снять inSquadRole
+ *
+ * Используем VoiceChannel.members (авторитетный источник кто в канале),
+ * а НЕ member.voice.channelId из guild.members.cache (может быть stale).
  */
 async function checkRoleIntegrity(client: BublikClient): Promise<void> {
   for (const [, guild] of client.guilds.cache) {
     const config = await getConfig(guild.id);
     if (!config || !config.inSquadRoleId || !config.pingRoleId) continue;
 
-    const pbChannelIds = await getAllPbChannelIds(guild.id);
-    if (pbChannelIds.length === 0) {
-      // Нет активных отрядов — у никого не должно быть inSquadRole
-      // (но для безопасности проверяем)
+    const squads = await getGuildSquads(guild.id);
+
+    // Собрать ID всех, кто СЕЙЧАС в ПБ-войсах (из VoiceChannel.members)
+    const membersInPb = new Set<string>();
+
+    for (const squad of squads) {
+      const mainVc = guild.channels.cache.get(squad.voiceChannelId);
+      if (mainVc && mainVc.type === ChannelType.GuildVoice) {
+        (mainVc as VoiceChannel).members.forEach((m) => {
+          if (!m.user.bot) membersInPb.add(m.id);
+        });
+      }
+
+      if (squad.airChannelId) {
+        const airVc = guild.channels.cache.get(squad.airChannelId);
+        if (airVc && airVc.type === ChannelType.GuildVoice) {
+          (airVc as VoiceChannel).members.forEach((m) => {
+            if (!m.user.bot) membersInPb.add(m.id);
+          });
+        }
+      }
     }
 
-    // Получить всех с inSquadRole
+    // ПОЗИТИВ: каждому в ПБ-войсе → правильные роли
+    for (const memberId of membersInPb) {
+      const member = guild.members.cache.get(memberId);
+      if (!member) continue;
+
+      const needsApply =
+        (config.pingRoleId && member.roles.cache.has(config.pingRoleId)) ||
+        (config.inSquadRoleId && !member.roles.cache.has(config.inSquadRoleId));
+
+      if (needsApply) {
+        await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+        log.info(`Integrity ✔: ${member.user.tag} — выданы роли ПБ (находится в войсе)`);
+      }
+    }
+
+    // НЕГАТИВ: у кого inSquadRole, но нет в ПБ-войсе → восстановить
     const inSquadRole = guild.roles.cache.get(config.inSquadRoleId);
     if (!inSquadRole) continue;
 
-    // Перебрать участников с этой ролью
-    const membersWithRole = inSquadRole.members;
-
-    for (const [, member] of membersWithRole) {
+    for (const [, member] of inSquadRole.members) {
       if (member.user.bot) continue;
 
-      const currentVoice = member.voice.channelId;
-      const isInPb = currentVoice && pbChannelIds.includes(currentVoice);
-
-      if (!isInPb) {
-        // Человек не в ПБ-войсе, но имеет inSquadRole → исправить
+      if (!membersInPb.has(member.id)) {
         await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
-        log.debug(`Integrity fix: ${member.user.tag} — убран inSquadRole (не в ПБ-войсе)`);
+        log.info(`Integrity ✖: ${member.user.tag} — убраны роли ПБ (не в войсе)`);
       }
     }
   }

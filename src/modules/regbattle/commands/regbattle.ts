@@ -114,7 +114,7 @@ const regbattleCommand: BublikCommand = {
             .setRequired(true)
             .addChoices(
               { name: '🎖️ Полевой командир', value: 'commander' },
-              { name: '🔇 Мьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
+              { name: '🔇 Немьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
             ),
         )
         .addRoleOption((opt) =>
@@ -134,7 +134,7 @@ const regbattleCommand: BublikCommand = {
             .setRequired(true)
             .addChoices(
               { name: '🎖️ Полевой командир', value: 'commander' },
-              { name: '🔇 Мьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
+              { name: '🔇 Немьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
             ),
         )
         .addRoleOption((opt) =>
@@ -245,7 +245,7 @@ async function handleSetup(
       `> ✈️ **Авиация (макс.):** ${config.airSize}${changed('airSize')}\n` +
       (isNew ? `\nДалее:\n` +
         `• \`/regbattle addrole type:commander\` — роли полевых командиров\n` +
-        `• \`/regbattle addrole type:mute\` — роли для мьюта\n` +
+        `• \`/regbattle addrole type:mute\` — роли-исключения из мьюта\n` +
         `• Зайдите в генератор для создания отряда` : ''),
     )],
     ephemeral: true,
@@ -286,7 +286,7 @@ async function handleAddRole(interaction: ChatInputCommandInteraction): Promise<
 
   const typeLabels: Record<string, string> = {
     commander: '🎖️ Полевые командиры',
-    mute: '🔇 Мьютимые',
+    mute: '🔇 Немьютимые',
   };
 
   const list = updated.map((id) => `<@&${id}>`).join(', ');
@@ -330,7 +330,7 @@ async function handleRemoveRole(interaction: ChatInputCommandInteraction): Promi
 
   const typeLabels: Record<string, string> = {
     commander: '🎖️ Полевые командиры',
-    mute: '🔇 Мьютимые',
+    mute: '🔇 Немьютимые',
   };
 
   const list = updated.length > 0 ? updated.map((id) => `<@&${id}>`).join(', ') : '*нет*';
@@ -369,7 +369,7 @@ async function handleConfig(interaction: ChatInputCommandInteraction): Promise<v
       `> 🔔 **Пинг-роль:** ${config.pingRoleId ? `<@&${config.pingRoleId}>` : '*—*'}\n` +
       `> 🎖️ **В отряде:** ${config.inSquadRoleId ? `<@&${config.inSquadRoleId}>` : '*—*'}\n` +
       `> 🎖️ **Командиры:** ${fmt(config.commanderRoleIds, '@&')}\n` +
-      `> 🔇 **Мьютимые:** ${fmt(config.muteRoleIds, '@&')}\n` +
+      `> 🔇 **Немьютимые:** ${fmt(config.muteRoleIds, '@&')}\n` +
       `> 👥 **Размер отряда:** ${config.squadSize}\n` +
       `> ✈️ **Авиация (макс.):** ${config.airSize}\n` +
       `> 📊 **Эскалация через:** ${config.pingEscalateAfter} пингов`,

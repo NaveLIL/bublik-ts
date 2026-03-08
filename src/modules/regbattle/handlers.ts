@@ -35,6 +35,7 @@ import {
   getSquad,
   updateSquad,
   getConfig,
+  getAllPbChannelIds,
 } from './database';
 
 import {
@@ -183,13 +184,15 @@ async function handleOrders(
   for (const member of members) {
     if (member.id === squad.ownerId) continue; // Командир не мьютится
 
-    // Мьютить всех с muteRoleIds, или всех если muteRoleIds пуст
-    if (config.muteRoleIds.length === 0) {
-      toMute.push(member);
-    } else {
-      const hasRole = config.muteRoleIds.some((id: string) => member.roles.cache.has(id));
-      if (hasRole) toMute.push(member);
+    // muteRoleIds — список ролей-исключений (например офицеры, которые НЕ мьютятся)
+    // Если muteRoleIds пуст — мьютятся все кроме командира
+    // Если muteRoleIds задан — НЕ мьютятся те, у кого есть одна из этих ролей
+    if (config.muteRoleIds.length > 0) {
+      const isExempt = config.muteRoleIds.some((id: string) => member.roles.cache.has(id));
+      if (isExempt) continue;
     }
+
+    toMute.push(member);
   }
 
   // Замьютить
@@ -350,7 +353,16 @@ async function handleDmPing(
     return;
   }
 
-  const targets = role.members.filter((m) => !m.user.bot);
+  // Получить список всех ПБ-каналов, чтобы исключить тех кто уже в отряде
+  const pbChannelIds = await getAllPbChannelIds(guild.id);
+
+  // Фильтр: не бот, НЕ в ПБ-войсе (отправляем тем, кто НЕ в голосовых каналах ПБ)
+  const targets = role.members.filter((m) => {
+    if (m.user.bot) return false;
+    const voiceId = m.voice.channelId;
+    // Если человек вообще не в войсе или его войс не в ПБ — ему нужен пинг
+    return !voiceId || !pbChannelIds.includes(voiceId);
+  });
   if (targets.size === 0) {
     await interaction.editReply({ embeds: [rbWarn('Нет доступных бойцов с пинг-ролью.')] });
     return;

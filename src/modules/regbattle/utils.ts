@@ -2,8 +2,11 @@
 //  RegBattle — Утилиты
 // ═══════════════════════════════════════════════
 
-import { Guild, GuildMember, VoiceChannel, ChannelType } from 'discord.js';
+import { Guild, GuildMember, VoiceChannel, ChannelType, Role } from 'discord.js';
 import { SQUAD_NAME_TEMPLATE, AIR_NAME_TEMPLATE } from './constants';
+import { logger } from '../../core/Logger';
+
+const log = logger.child('RegBattle:Roles');
 
 // ═══════════════════════════════════════════════
 //  Имена каналов
@@ -75,6 +78,24 @@ export function getSquadMembers(guild: Guild, voiceChannelId: string, airChannel
 // ═══════════════════════════════════════════════
 
 /**
+ * Проверить иерархию: может ли бот управлять целевой ролью
+ */
+function canManageRole(guild: Guild, role: Role | undefined): boolean {
+  if (!role) return false;
+  const botMember = guild.members.me;
+  if (!botMember) return false;
+  if (botMember.roles.highest.position <= role.position) {
+    log.warn(
+      `Иерархия ролей: бот (${botMember.roles.highest.name}:${botMember.roles.highest.position}) ` +
+      `не может управлять ролью ${role.name}:${role.position}. ` +
+      `Переместите роль бота ВЫШЕ этой роли в настройках сервера.`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
  * Выдать inSquadRole, снять pingRole (вход в отряд)
  */
 export async function applySquadRoles(
@@ -82,11 +103,41 @@ export async function applySquadRoles(
   pingRoleId: string | null,
   inSquadRoleId: string | null,
 ): Promise<void> {
-  if (pingRoleId && member.roles.cache.has(pingRoleId)) {
-    await member.roles.remove(pingRoleId, 'RegBattle: вход в отряд').catch(() => null);
+  const guild = member.guild;
+  const tag = member.user.tag;
+
+  // Снять пинг-роль
+  if (pingRoleId) {
+    const role = guild.roles.cache.get(pingRoleId);
+    if (!role) {
+      log.warn(`pingRole ${pingRoleId} не найдена в кэше гильдии`);
+    } else if (!canManageRole(guild, role)) {
+      // предупреждение уже залогировано
+    } else if (member.roles.cache.has(pingRoleId)) {
+      try {
+        await member.roles.remove(pingRoleId, 'RegBattle: вход в отряд');
+        log.info(`✔ Снята pingRole ${role.name} у ${tag}`);
+      } catch (err) {
+        log.error(`✗ Не удалось снять pingRole ${role.name} у ${tag}`, { error: String(err) });
+      }
+    }
   }
-  if (inSquadRoleId && !member.roles.cache.has(inSquadRoleId)) {
-    await member.roles.add(inSquadRoleId, 'RegBattle: вход в отряд').catch(() => null);
+
+  // Выдать роль «в отряде»
+  if (inSquadRoleId) {
+    const role = guild.roles.cache.get(inSquadRoleId);
+    if (!role) {
+      log.warn(`inSquadRole ${inSquadRoleId} не найдена в кэше гильдии`);
+    } else if (!canManageRole(guild, role)) {
+      // предупреждение уже залогировано
+    } else if (!member.roles.cache.has(inSquadRoleId)) {
+      try {
+        await member.roles.add(inSquadRoleId, 'RegBattle: вход в отряд');
+        log.info(`✔ Выдана inSquadRole ${role.name} для ${tag}`);
+      } catch (err) {
+        log.error(`✗ Не удалось выдать inSquadRole ${role.name} для ${tag}`, { error: String(err) });
+      }
+    }
   }
 }
 
@@ -98,11 +149,41 @@ export async function restoreSquadRoles(
   pingRoleId: string | null,
   inSquadRoleId: string | null,
 ): Promise<void> {
-  if (inSquadRoleId && member.roles.cache.has(inSquadRoleId)) {
-    await member.roles.remove(inSquadRoleId, 'RegBattle: выход из отряда').catch(() => null);
+  const guild = member.guild;
+  const tag = member.user.tag;
+
+  // Снять роль «в отряде»
+  if (inSquadRoleId) {
+    const role = guild.roles.cache.get(inSquadRoleId);
+    if (!role) {
+      log.warn(`inSquadRole ${inSquadRoleId} не найдена в кэше гильдии`);
+    } else if (!canManageRole(guild, role)) {
+      // предупреждение уже залогировано
+    } else if (member.roles.cache.has(inSquadRoleId)) {
+      try {
+        await member.roles.remove(inSquadRoleId, 'RegBattle: выход из отряда');
+        log.info(`✔ Снята inSquadRole ${role.name} у ${tag}`);
+      } catch (err) {
+        log.error(`✗ Не удалось снять inSquadRole ${role.name} у ${tag}`, { error: String(err) });
+      }
+    }
   }
-  if (pingRoleId && !member.roles.cache.has(pingRoleId)) {
-    await member.roles.add(pingRoleId, 'RegBattle: выход из отряда').catch(() => null);
+
+  // Вернуть пинг-роль
+  if (pingRoleId) {
+    const role = guild.roles.cache.get(pingRoleId);
+    if (!role) {
+      log.warn(`pingRole ${pingRoleId} не найдена в кэше гильдии`);
+    } else if (!canManageRole(guild, role)) {
+      // предупреждение уже залогировано
+    } else if (!member.roles.cache.has(pingRoleId)) {
+      try {
+        await member.roles.add(pingRoleId, 'RegBattle: выход из отряда');
+        log.info(`✔ Возвращена pingRole ${role.name} для ${tag}`);
+      } catch (err) {
+        log.error(`✗ Не удалось вернуть pingRole ${role.name} для ${tag}`, { error: String(err) });
+      }
+    }
   }
 }
 
