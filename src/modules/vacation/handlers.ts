@@ -614,6 +614,29 @@ async function handleApproveButton(
     return;
   }
 
+  // Проверка: нет ли уже активного отпуска у этого пользователя (race condition с force/quick)
+  const existingActive = await getActiveVacation(request.guildId, request.userId);
+  if (existingActive) {
+    await updateRequest(requestId, { status: VacationStatus.Denied, reviewerId: reviewer.id });
+
+    // Обновить сообщение ревью
+    if (request.reviewMessageId) {
+      try {
+        const reviewChannel = await client.channels.fetch(config.reviewChannelId!) as TextChannel;
+        const msg = await reviewChannel.messages.fetch(request.reviewMessageId);
+        await msg.edit({
+          embeds: [buildDeniedRequestEmbed(request, member, reviewer, false)],
+          components: [],
+        });
+      } catch { /* skip */ }
+    }
+
+    await interaction.editReply({
+      embeds: [vacError(`У ${member.toString()} уже есть активный отпуск. Заявка автоматически отклонена.`)],
+    });
+    return;
+  }
+
   const now = new Date();
   const endDate = new Date(now.getTime() + request.durationMinutes * 60_000);
 
@@ -711,7 +734,7 @@ async function handleDenyButton(
       const reviewChannel = await client.channels.fetch(config.reviewChannelId!) as TextChannel;
       const msg = await reviewChannel.messages.fetch(request.reviewMessageId);
       await msg.edit({
-        embeds: [buildDeniedRequestEmbed(request, member!, reviewer, isSelfCancel)],
+        embeds: [buildDeniedRequestEmbed(request, member, reviewer, isSelfCancel)],
         components: [],
       });
     } catch { /* skip */ }

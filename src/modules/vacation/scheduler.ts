@@ -32,6 +32,7 @@ import {
 const log = logger.child('Vacation:Scheduler');
 
 let schedulerInterval: ReturnType<typeof setInterval> | null = null;
+let isRunning = false; // Защита от перекрытия запусков
 
 // ═══════════════════════════════════════════════
 //  Start / Stop
@@ -68,9 +69,18 @@ export function stopScheduler(): void {
 // ═══════════════════════════════════════════════
 
 async function runChecks(client: BublikClient): Promise<void> {
-  await checkPendingExpiry(client);
-  await checkReminders(client);
-  await checkVacationEnd(client);
+  if (isRunning) {
+    log.debug('Шедулер: предыдущий запуск ещё не завершён — пропуск');
+    return;
+  }
+  isRunning = true;
+  try {
+    await checkPendingExpiry(client);
+    await checkReminders(client);
+    await checkVacationEnd(client);
+  } finally {
+    isRunning = false;
+  }
 }
 
 // ═══════════════════════════════════════════════

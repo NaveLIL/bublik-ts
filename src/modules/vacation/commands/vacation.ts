@@ -32,6 +32,7 @@ import {
   upsertConfig,
   createRequest,
   getActiveVacation,
+  getPendingRequest,
   getGuildActiveVacations,
   updateRequest,
 } from '../database';
@@ -594,6 +595,13 @@ async function handleForce(
     return;
   }
 
+  // Автоматически отклонить ожидающую заявку если есть
+  const pending = await getPendingRequest(guildId, targetUser.id);
+  if (pending) {
+    await updateRequest(pending.id, { status: VacationStatus.Denied, reviewerId: interaction.user.id });
+    log.info(`Автоотклонение pending заявки ${pending.id} при force-отпуске для ${targetUser.tag}`);
+  }
+
   await interaction.deferReply({ ephemeral: true });
 
   const guild = interaction.guild!;
@@ -823,8 +831,17 @@ async function handleList(
     }
   }
 
+  let description = lines.join('\n');
+
+  // Защита от превышения лимита Discord (4096 символов)
+  const header = `📋 **Отпуска** (${vacations.length})\n\n`;
+  const maxLen = 4096 - header.length - 50; // запас для "..."
+  if (description.length > maxLen) {
+    description = description.slice(0, maxLen) + '\n\n… и ещё записи (не поместились)';
+  }
+
   await interaction.reply({
-    embeds: [successEmbed(`📋 **Отпуска** (${vacations.length})\n\n${lines.join('\n')}`)],
+    embeds: [successEmbed(`${header}${description}`)],
     ephemeral: true,
   });
 }

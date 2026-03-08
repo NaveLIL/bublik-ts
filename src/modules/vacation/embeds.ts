@@ -244,22 +244,30 @@ export function buildApprovedRequestEmbed(
 
 export function buildDeniedRequestEmbed(
   request: VacationRequest,
-  member: GuildMember,
+  member: GuildMember | null,
   reviewer: GuildMember | null,
   selfCancel: boolean = false,
 ): BublikEmbed {
   const title = selfCancel ? '🔙 Заявка отозвана' : '❌ Заявка отклонена';
+  const userText = member
+    ? `${member.toString()} (${member.user.tag})`
+    : `<@${request.userId}>`;
 
-  return new BublikEmbed()
+  const embed = new BublikEmbed()
     .setColor(COLOR_DANGER)
-    .setAuthor({ name: title, iconURL: member.displayAvatarURL() })
+    .setAuthor({
+      name: title,
+      ...(member ? { iconURL: member.displayAvatarURL() } : {}),
+    })
     .setDescription(
-      `> 👤 **Участник:** ${member.toString()}\n` +
+      `> 👤 **Участник:** ${userText}\n` +
       `> 📝 **Причина:** ${request.reason}\n` +
       `> ⏳ **Срок:** ${formatDuration(request.durationMinutes)}\n` +
       (reviewer ? `> 👮 **${selfCancel ? 'Отозвал' : 'Отклонил'}:** ${reviewer.toString()}` : ''),
     )
     .setTimestamp();
+
+  return embed;
 }
 
 export function buildExpiredRequestEmbed(
