@@ -286,15 +286,26 @@ async function handleEscalated(
 ): Promise<void> {
   if (now - state.lastIndividualPingAt < INDIVIDUAL_PING_INTERVAL_MS) return;
 
-  // Обновить очередь если пустая или исчерпана
-  if (state.individualQueue.length === 0 || state.individualIndex >= state.individualQueue.length) {
+  // Очередь исчерпана → один круг завершён, кулдаун 30 мин
+  if (state.individualQueue.length > 0 && state.individualIndex >= state.individualQueue.length) {
+    state.phase = PingPhase.Recruiting;
+    state.rolePingsWithoutProgress = 0;
+    state.lastEscalationEndedAt = now;
+    state.individualQueue = [];
+    state.individualIndex = 0;
+    log.info(`Пингер гильдии ${guild.id}: именные пинги завершены (1 круг), кулдаун 30 мин`);
+    return;
+  }
+
+  // Заполнить очередь при первом входе в фазу
+  if (state.individualQueue.length === 0) {
     await refreshIndividualQueue(guild, config, state);
     if (state.individualQueue.length === 0) {
-      // Нет доступных бойцов → завершить цикл эскалации
+      // Нет доступных бойцов → вернуться к ролевым пингам
       state.phase = PingPhase.Recruiting;
       state.rolePingsWithoutProgress = 0;
       state.lastEscalationEndedAt = now;
-      log.info(`Пингер гильдии ${guild.id}: именные пинги завершены, кулдаун 30 мин`);
+      log.info(`Пингер гильдии ${guild.id}: нет бойцов для именных пингов, кулдаун 30 мин`);
       return;
     }
   }
