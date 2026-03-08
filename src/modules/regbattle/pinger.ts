@@ -24,7 +24,7 @@ import {
   FULL_SUGGEST_INTERVAL_MS,
 } from './constants';
 
-import { getConfig, getGuildSquads } from './database';
+import { getConfig, getGuildSquads, getAllPbChannelIds } from './database';
 import { getSquadMemberCount } from './utils';
 
 import {
@@ -51,6 +51,7 @@ interface GuildPingerState {
   lastRolePingAt: number;
   lastIndividualPingAt: number;
   lastFullSuggestAt: number;
+  lastEscalationEndedAt: number; // когда закончился последний цикл именных пингов
   rolePingsWithoutProgress: number;
   lastKnownTotal: number;
   individualQueue: string[];     // userIds для именного пинга
@@ -115,6 +116,7 @@ function createEmptyState(): GuildPingerState {
     lastRolePingAt: 0,
     lastIndividualPingAt: 0,
     lastFullSuggestAt: 0,
+    lastEscalationEndedAt: 0,
     rolePingsWithoutProgress: 0,
     lastKnownTotal: 0,
     individualQueue: [],
@@ -187,7 +189,11 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
       state.phase = PingPhase.Full;
     } else if (anyUnfilled) {
       // Проверить, нужна ли эскалация
-      if (state.rolePingsWithoutProgress >= (config.pingEscalateAfter ?? 3)) {
+      const escalateAfter = config.pingEscalateAfter ?? 6;
+      const escalationCooldownMs = 30 * 60_000; // 30 минут между циклами именных пингов
+      const cooledDown = now - state.lastEscalationEndedAt >= escalationCooldownMs;
+
+      if (state.rolePingsWithoutProgress >= escalateAfter && cooledDown) {
         state.phase = PingPhase.Escalated;
       } else {
         state.phase = PingPhase.Recruiting;
@@ -252,7 +258,11 @@ async function handleRecruiting(
     state.rolePingsWithoutProgress++;
 
     // Проверить эскалацию
-    if (state.rolePingsWithoutProgress >= (config.pingEscalateAfter ?? 3)) {
+    const escalateAfter = config.pingEscalateAfter ?? 6;
+    const escalationCooldownMs = 30 * 60_000;
+    const cooledDown = now - state.lastEscalationEndedAt >= escalationCooldownMs;
+
+    if (state.rolePingsWithoutProgress >= escalateAfter && cooledDown) {
       state.phase = PingPhase.Escalated;
       state.individualQueue = [];
       state.individualIndex = 0;
@@ -276,13 +286,15 @@ async function handleEscalated(
 ): Promise<void> {
   if (now - state.lastIndividualPingAt < INDIVIDUAL_PING_INTERVAL_MS) return;
 
-  // Обновить очередь если пустая
+  // Обновить очередь если пустая или исчерпана
   if (state.individualQueue.length === 0 || state.individualIndex >= state.individualQueue.length) {
     await refreshIndividualQueue(guild, config, state);
     if (state.individualQueue.length === 0) {
-      // Нет доступных бойцов → продолжать пинги роли
+      // Нет доступных бойцов → завершить цикл эскалации
       state.phase = PingPhase.Recruiting;
       state.rolePingsWithoutProgress = 0;
+      state.lastEscalationEndedAt = now;
+      log.info(`Пингер гильдии ${guild.id}: именные пинги завершены, кулдаун 30 мин`);
       return;
     }
   }
@@ -328,8 +340,16 @@ async function refreshIndividualQueue(guild: Guild, config: any, state: GuildPin
       return;
     }
 
+    const pbChannelIds = await getAllPbChannelIds(guild.id);
+
     const available = role.members
-      .filter((m) => !m.user.bot)
+      .filter((m) => {
+        if (m.user.bot) return false;
+        // Исключить тех, кто уже в ПБ-войсе
+        const voiceId = m.voice.channelId;
+        if (voiceId && pbChannelIds.includes(voiceId)) return false;
+        return true;
+      })
       .map((m) => m.id);
 
     // Перемешать (чтобы не пинговать одних и тех же первыми)
