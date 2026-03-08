@@ -224,3 +224,56 @@ model VacationRequest {
   @@index([status])
   @@map("vacation_requests")
 }
+
+// ═══════════════════════════════════════════════
+//  Полковые бои (RegBattle)
+// ═══════════════════════════════════════════════
+
+// ── Конфигурация системы ПБ ───────────────────
+model RegBattleConfig {
+  id                String   @id @default(cuid())
+  guildId           String   @unique
+
+  masterChannelId   String?                             // канал-генератор (войс для создания отрядов)
+  categoryId        String?                             // категория для временных каналов ПБ
+  announceChannelId String?                             // канал для пингов/объявлений
+  reserveChannelId  String?                             // войс канал запасных
+
+  pingRoleId        String?                             // роль для пинга доступных бойцов
+  inSquadRoleId     String?                             // роль «в отряде» (снимает пинг-роль)
+  commanderRoleIds  String[] @default([])               // роли полевых командиров (доступ к генератору)
+  muteRoleIds       String[] @default([])               // роли, мьютящиеся по кнопке «Распоряжения»
+
+  squadSize         Int      @default(8)                // целевой размер отряда
+  airSize           Int      @default(4)                // макс. людей в авиа-канале
+
+  pingEscalateAfter Int     @default(3)                 // сколько пингов роли до эскалации к именным
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  squads            RegBattleSquad[]
+
+  @@map("regbattle_configs")
+}
+
+// ── Активный отряд (временный голосовой канал) ─
+model RegBattleSquad {
+  id              String   @id @default(cuid())
+  guildId         String
+  number          Int                                   // номер отряда (1, 2, …)
+
+  voiceChannelId  String   @unique                      // основной голосовой канал
+  airChannelId    String?                               // авиационный суб-канал (привязан к основному)
+
+  panelMessageId  String?                               // ID сообщения с панелью управления
+  ownerId         String                                // текущий владелец (полевой командир)
+
+  createdAt       DateTime @default(now())
+
+  configId        String
+  config          RegBattleConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@map("regbattle_squads")
+}
