@@ -4,7 +4,6 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   GuildMember,
-  BaseGuildTextChannel,
 } from 'discord.js';
 import type { BublikClient } from '../../bot';
 import { Config } from '../../config';
@@ -18,7 +17,6 @@ import {
   buildRegimentRulesEmbed,
   buildJoinCompleteEmbed,
   buildOtherQuestionEmbed,
-  buildTicketPingEmbed,
 } from './embeds';
 
 const log = logger.child('Welcome');
@@ -27,7 +25,7 @@ const log = logger.child('Welcome');
 const PREFIX = 'welcome';
 
 // ── Rate-limit кнопок (защита от спама) ──────────
-const BUTTON_COOLDOWN_MS = 3_000; // 3 секунды между нажатиями
+const BUTTON_COOLDOWN_MS = 1_500; // 1.5 секунды между нажатиями
 const buttonCooldowns = new Map<string, number>();
 
 function isButtonRateLimited(userId: string): boolean {
@@ -167,7 +165,7 @@ export async function handleWelcomeButton(
     return;
   }
 
-  // Rate-limit: не чаще раза в 3 секунды
+  // Rate-limit: не чаще раза в 1.5 секунды
   if (isButtonRateLimited(interaction.user.id)) {
     await interaction.reply({
       content: '⏳ Подождите немного перед следующим нажатием.',
@@ -266,9 +264,6 @@ async function handleOther(interaction: ButtonInteraction, client: BublikClient)
     components: [],
   }).catch((err) => log.warn('Не удалось обновить welcome-сообщение', err));
 
-  // Пинг в канале тикетов
-  await sendTicketPing(client, ticketChannelId, userId, false);
-
   log.info(`[Welcome] ${interaction.user.tag} выбрал "другой вопрос" → тикеты`);
 }
 
@@ -360,41 +355,10 @@ async function handleRulesDone(interaction: ButtonInteraction, client: BublikCli
     components: [],
   });
 
-  // 3. Скрытый пинг в канале тикетов — embed-уведомление для рекрутинга
-  //    (@упоминание убрано — пользователь уже уведомлён через ephemeral выше)
-  await sendTicketPing(client, ticketChannelId, userId, true);
-
-  // 4. Чистим состояние из Redis
+  // 3. Чистим состояние из Redis
   await clearState(userId);
 
   log.info(`[Welcome] ${interaction.user.tag} завершил ознакомление, роль выдана → тикеты`);
 }
 
-// ═══════════════════════════════════════════════
-//  Утилита: пинг в канале тикетов
-// ═══════════════════════════════════════════════
 
-async function sendTicketPing(
-  client: BublikClient,
-  channelId: string,
-  userId: string,
-  isRecruit: boolean,
-): Promise<void> {
-  try {
-    // Фетчим канал — не из кэша
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased()) {
-      log.error(`Канал тикетов ${channelId} не найден или не текстовый`);
-      return;
-    }
-
-    // Скрытый (не шумящий) embed — виден только тем, у кого есть доступ к каналу
-    await (channel as BaseGuildTextChannel).send({
-      embeds: [buildTicketPingEmbed(userId, isRecruit)],
-    });
-
-    log.info(`Пинг отправлен в канал тикетов для ${userId}`);
-  } catch (err) {
-    log.error('Ошибка отправки пинга в тикет-канал', err);
-  }
-}

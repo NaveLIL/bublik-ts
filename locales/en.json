@@ -48,6 +48,9 @@
     },
     "welcome": {
       "description": "New member welcome and candidate onboarding"
+    },
+    "tempvoice": {
+      "description": "Temporary voice channels with full control panel"
     }
   },
 
@@ -65,6 +68,9 @@
       "description": "Reload a module without restarting",
       "success": "✅ Module **{module}** reloaded in **{time}ms**",
       "error": "❌ Failed to reload module **{module}**"
+    },
+    "voice": {
+      "description": "Manage temporary voice channels (setup/remove/list)"
     }
   },
 

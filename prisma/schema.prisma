@@ -40,3 +40,105 @@ model ModuleLog {
 
   @@map("module_logs")
 }
+
+// ═══════════════════════════════════════════════
+//  Временные голосовые каналы (TempVoice)
+// ═══════════════════════════════════════════════
+
+// ── Генератор (настройки «канала-создателя») ──
+model TempVoiceGenerator {
+  id             String   @id @default(cuid())
+  guildId        String
+  channelId      String   @unique                    // голосовой канал-триггер
+  categoryId     String                              // категория для новых каналов
+  interfaceId    String?                             // текстовый канал с панелью управления
+
+  // Шаблон имени: {username}, {nickname}, {game}, {count}
+  defaultName    String   @default("{nickname}")
+  defaultLimit   Int      @default(0)                // 0 = без лимита  
+  defaultBitrate Int      @default(64000)
+  defaultRegion  String   @default("auto")
+  initialState   String   @default("unlocked")       // unlocked | locked | hidden
+
+  // Ограничения (антиабьюз)
+  maxChannelsPerUser Int  @default(1)
+  maxUserLimit       Int  @default(99)
+  minUserLimit       Int  @default(0)
+  maxBitrate         Int  @default(96000)
+  minBitrate         Int  @default(8000)
+
+  // Роли
+  immuneRoleIds  String[] @default([])               // модераторские роли — обходят все ограничения
+  boosterPerks   Boolean  @default(true)             // бустеры получают расширенные права
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  channels       TempVoiceChannel[]
+
+  @@index([guildId])
+  @@map("tempvoice_generators")
+}
+
+// ── Активный временный голосовой канал ────────
+model TempVoiceChannel {
+  id             String   @id                        // Discord channel ID
+  guildId        String
+  ownerId        String                              // текущий владелец
+  generatorId    String
+  generator      TempVoiceGenerator @relation(fields: [generatorId], references: [id], onDelete: Cascade)
+
+  state          String   @default("unlocked")       // unlocked | locked | hidden
+  controlMsgId   String?                             // ID сообщения с панелью в текстовом чате VC
+
+  // Антиспам переименований
+  nameChanges    Int      @default(0)
+  lastNameChange DateTime?
+
+  createdAt      DateTime @default(now())
+  lastActivity   DateTime @default(now())
+
+  trusted        TempVoiceTrust[]
+  blocked        TempVoiceBlock[]
+
+  @@index([guildId])
+  @@index([ownerId])
+  @@map("tempvoice_channels")
+}
+
+// ── Доверенные пользователи канала ────────────
+model TempVoiceTrust {
+  id        String           @id @default(cuid())
+  channelId String
+  channel   TempVoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+
+  @@unique([channelId, userId])
+  @@map("tempvoice_trusted")
+}
+
+// ── Заблокированные пользователи канала ───────
+model TempVoiceBlock {
+  id        String           @id @default(cuid())
+  channelId String
+  channel   TempVoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String
+
+  @@unique([channelId, userId])
+  @@map("tempvoice_blocked")
+}
+
+// ── Сохранённые настройки пользователя ────────
+model TempVoiceUserSettings {
+  id        String  @id @default(cuid())
+  userId    String
+  guildId   String
+
+  savedName    String?
+  savedLimit   Int?
+  savedBitrate Int?
+  savedRegion  String?
+
+  @@unique([userId, guildId])
+  @@map("tempvoice_user_settings")
+}
