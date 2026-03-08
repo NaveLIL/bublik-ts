@@ -1,0 +1,41 @@
+# ── Dependencies ──────────────────────────────
+node_modules/
+
+# ── Build output ──────────────────────────────
+dist/
+dist-protected/
+*.js.map
+*.tsbuildinfo
+
+# ── Environment & secrets ─────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Logs ──────────────────────────────────────
+logs/
+*.log
+
+# ── Database ──────────────────────────────────
+prisma/migrations/
+
+# ── OS files ──────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Docker volumes (local) ────────────────────
+pg_data/
+redis_data/
+
+# ── Package lock (npm ci uses it, but optional)
+# package-lock.json

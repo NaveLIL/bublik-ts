@@ -1,0 +1,92 @@
+{
+  "info": {
+    "panel": {
+      "title": "Information Panel",
+      "description": "Welcome! Select a section from the menu below to navigate through **Bublik** bot commands and modules.",
+      "stats": "Statistics",
+      "system": "System",
+      "guilds": "Guilds",
+      "users": "Users",
+      "commands": "Commands",
+      "modules": "Modules"
+    },
+    "modules": {
+      "title": "Modules",
+      "description": "List of all loaded bot modules and their commands.",
+      "commands": "Commands"
+    },
+    "category": {
+      "empty": "No commands in this category yet."
+    },
+    "select": {
+      "placeholder": "📂 Select a section…",
+      "main": "Home",
+      "main_desc": "Statistics and general information",
+      "modules": "Modules",
+      "modules_desc": "List of loaded modules",
+      "category_desc": "Commands in {category} category"
+    }
+  },
+
+  "categories": {
+    "general": "General",
+    "moderation": "Moderation",
+    "utility": "Utility",
+    "fun": "Fun",
+    "admin": "Administration",
+    "info": "Information",
+    "music": "Music",
+    "economy": "Economy"
+  },
+
+  "modules": {
+    "info": {
+      "description": "Information panel and command help"
+    },
+    "general": {
+      "description": "Core commands: ping, module reload"
+    },
+    "welcome": {
+      "description": "New member welcome and candidate onboarding"
+    }
+  },
+
+  "commands": {
+    "info": {
+      "description": "Open the bot information panel"
+    },
+    "ping": {
+      "description": "Check bot latency",
+      "title": "Pong!",
+      "roundtrip": "Roundtrip",
+      "websocket": "WebSocket"
+    },
+    "reload": {
+      "description": "Reload a module without restarting",
+      "success": "✅ Module **{module}** reloaded in **{time}ms**",
+      "error": "❌ Failed to reload module **{module}**"
+    }
+  },
+
+  "errors": {
+    "unknown_command": "Unknown command.",
+    "no_permission": "You don't have permission to use this command.",
+    "cooldown": "Please wait {remaining}s before using this again.",
+    "generic": "An error occurred while executing the command.",
+    "command_error": {
+      "title": "Command Execution Error",
+      "description": "An unexpected error occurred while executing this command. The information has been sent to the administrators.",
+      "command": "📡 Command",
+      "error_type": "🚨 Error Type",
+      "details": "🔍 Details"
+    }
+  },
+
+  "common": {
+    "yes": "Yes",
+    "no": "No",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "page": "Page {current} of {total}"
+  }
+}

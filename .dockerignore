@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+logs
+*.md
+.eslintrc*
+.prettierrc*
+scripts/obfuscate.js
+dist
+dist-protected
+.dockerignore
+.gitignore
