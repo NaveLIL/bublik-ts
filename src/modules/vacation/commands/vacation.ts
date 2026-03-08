@@ -11,6 +11,7 @@
 //  • primetime — настройка прайм-тайма
 //  • config    — показать текущую конфигурацию
 //  • list      — список активных/ожидающих отпусков
+//  • antiabuse — настройка антиабьюза (кулдаун, лимиты)
 // ═══════════════════════════════════════════════
 
 import {
@@ -233,6 +234,37 @@ const vacationCommand: BublikCommand = {
     // ── list ──────────────────────
     .addSubcommand((sub) =>
       sub.setName('list').setDescription('Список активных и ожидающих отпусков'),
+    )
+
+    // ── antiabuse ─────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName('antiabuse')
+        .setDescription('Настроить антиабьюз (кулдаун, лимиты)')
+        .addIntegerOption((opt) =>
+          opt
+            .setName('cooldown')
+            .setDescription('Дней кулдауна после возврата из отпуска (0 = отключить)')
+            .setMinValue(0)
+            .setMaxValue(90)
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('max_per_month')
+            .setDescription('Макс. отпусков за 30 дней (0 = без лимита)')
+            .setMinValue(0)
+            .setMaxValue(30)
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('max_quick_per_week')
+            .setDescription('Макс. быстрых отпусков за 7 дней (0 = без лимита)')
+            .setMinValue(0)
+            .setMaxValue(14)
+            .setRequired(false),
+        ),
     ),
 
   scope: CommandScope.Guild,
@@ -263,6 +295,7 @@ const vacationCommand: BublikCommand = {
       case 'primetime':  await handlePrimeTime(interaction); break;
       case 'config':     await handleConfig(interaction); break;
       case 'list':       await handleList(interaction); break;
+      case 'antiabuse':  await handleAntiAbuse(interaction); break;
     }
   },
 };
@@ -689,7 +722,11 @@ async function handleConfig(
       `> ⚡ **Быстрый отпуск:** ${config.quickDurationH}ч\n` +
       `> 🕐 **Прайм-тайм:** ${String(config.primeTimeStart).padStart(2, '0')}:00 — ` +
         `${String(config.primeTimeEnd).padStart(2, '0')}:00 МСК\n` +
-      `> 🚫 **Блокировка с:** ${String(blockStart).padStart(2, '0')}:00 МСК`,
+      `> 🚫 **Блокировка с:** ${String(blockStart).padStart(2, '0')}:00 МСК\n\n` +
+      `🛡️ **Антиабьюз:**\n` +
+      `> ⏳ **Кулдаун:** ${config.cooldownDays} дн.\n` +
+      `> 📊 **Макс. за 30 дн.:** ${config.maxPerMonth || '∞'}\n` +
+      `> ⚡ **Макс. быстрых/7 дн.:** ${config.maxQuickPerWeek || '∞'}`,
     )],
     ephemeral: true,
   });
@@ -744,6 +781,63 @@ async function handleList(
     embeds: [successEmbed(`📋 **Отпуска** (${vacations.length})\n\n${lines.join('\n')}`)],
     ephemeral: true,
   });
+}
+
+// ═══════════════════════════════════════════════
+//  /vacation antiabuse — настройка антиабьюза
+// ═══════════════════════════════════════════════
+
+async function handleAntiAbuse(
+  interaction: ChatInputCommandInteraction,
+): Promise<void> {
+  const guildId = interaction.guildId!;
+  const config = await getConfig(guildId);
+  if (!config) {
+    await interaction.reply({
+      embeds: [errorEmbed('Система отпусков не настроена. Используйте `/vacation setup`.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const cooldown = interaction.options.getInteger('cooldown');
+  const maxPerMonth = interaction.options.getInteger('max_per_month');
+  const maxQuickPerWeek = interaction.options.getInteger('max_quick_per_week');
+
+  // Если ничего не указано — показать текущие настройки
+  if (cooldown === null && maxPerMonth === null && maxQuickPerWeek === null) {
+    await interaction.reply({
+      embeds: [successEmbed(
+        `🛡️ **Настройки антиабьюза:**\n\n` +
+        `> ⏳ **Кулдаун после отпуска:** ${config.cooldownDays} дн.\n` +
+        `> 📊 **Макс. отпусков за 30 дн.:** ${config.maxPerMonth || '∞ (без лимита)'}\n` +
+        `> ⚡ **Макс. быстрых за 7 дн.:** ${config.maxQuickPerWeek || '∞ (без лимита)'}\n\n` +
+        `Укажите параметры для изменения:\n` +
+        `\`/vacation antiabuse cooldown:7 max_per_month:3 max_quick_per_week:2\``,
+      )],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const updateData: Record<string, number> = {};
+  if (cooldown !== null) updateData.cooldownDays = cooldown;
+  if (maxPerMonth !== null) updateData.maxPerMonth = maxPerMonth;
+  if (maxQuickPerWeek !== null) updateData.maxQuickPerWeek = maxQuickPerWeek;
+
+  const updated = await upsertConfig(guildId, updateData);
+
+  await interaction.reply({
+    embeds: [successEmbed(
+      `🛡️ **Антиабьюз обновлён:**\n\n` +
+      `> ⏳ **Кулдаун:** ${updated.cooldownDays} дн.${cooldown !== null ? ' ✏️' : ''}\n` +
+      `> 📊 **Макс. за 30 дн.:** ${updated.maxPerMonth || '∞'}${maxPerMonth !== null ? ' ✏️' : ''}\n` +
+      `> ⚡ **Макс. быстрых/7 дн.:** ${updated.maxQuickPerWeek || '∞'}${maxQuickPerWeek !== null ? ' ✏️' : ''}`,
+    )],
+    ephemeral: true,
+  });
+
+  log.info(`Антиабьюз обновлён: cooldown=${updated.cooldownDays}, maxMonth=${updated.maxPerMonth}, maxQuick=${updated.maxQuickPerWeek}`);
 }
 
 export default vacationCommand;

@@ -41,9 +41,7 @@ export async function deleteConfig(guildId: string) {
   await getRedis().del(`${CACHE_PREFIX}:${guildId}`);
 }
 
-function invalidateConfigCache(guildId: string) {
-  return getRedis().del(`${CACHE_PREFIX}:${guildId}`);
-}
+// (invalidateConfigCache удалён — upsertConfig обновляет кэш автоматически)
 
 // ═══════════════════════════════════════════════
 //  VacationRequest — CRUD
@@ -164,4 +162,80 @@ export async function getGuildActiveVacations(guildId: string) {
     orderBy: { createdAt: 'desc' },
     include: { config: true },
   });
+}
+
+// ═══════════════════════════════════════════════
+//  Антиабьюз запросы
+// ═══════════════════════════════════════════════
+
+/**
+ * Дата окончания последнего завершённого отпуска пользователя
+ */
+export async function getLastCompletedVacationEnd(guildId: string, userId: string): Promise<Date | null> {
+  const last = await getDatabase().vacationRequest.findFirst({
+    where: {
+      guildId,
+      userId,
+      status: VacationStatus.Completed,
+      endDate: { not: null },
+    },
+    orderBy: { endDate: 'desc' },
+    select: { endDate: true },
+  });
+  return last?.endDate ?? null;
+}
+
+/**
+ * Количество отпусков пользователя (active/completed) за последние N дней
+ */
+export async function countRecentVacations(
+  guildId: string,
+  userId: string,
+  daysBack: number,
+): Promise<number> {
+  const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+  return getDatabase().vacationRequest.count({
+    where: {
+      guildId,
+      userId,
+      status: { in: [VacationStatus.Active, VacationStatus.Completed] },
+      createdAt: { gte: since },
+    },
+  });
+}
+
+/**
+ * Количество быстрых отпусков за последние N дней
+ */
+export async function countRecentQuickLeaves(
+  guildId: string,
+  userId: string,
+  daysBack: number,
+): Promise<number> {
+  const since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000);
+  return getDatabase().vacationRequest.count({
+    where: {
+      guildId,
+      userId,
+      type: 'quick',
+      status: { in: [VacationStatus.Active, VacationStatus.Completed] },
+      createdAt: { gte: since },
+    },
+  });
+}
+
+/**
+ * Получить статистику отпусков пользователя для ревью
+ */
+export async function getUserVacationStats(guildId: string, userId: string) {
+  const [totalAll, last30d, quickLast7d, lastEnd] = await Promise.all([
+    getDatabase().vacationRequest.count({
+      where: { guildId, userId, status: { in: [VacationStatus.Active, VacationStatus.Completed] } },
+    }),
+    countRecentVacations(guildId, userId, 30),
+    countRecentQuickLeaves(guildId, userId, 7),
+    getLastCompletedVacationEnd(guildId, userId),
+  ]);
+
+  return { totalAll, last30d, quickLast7d, lastEnd };
 }

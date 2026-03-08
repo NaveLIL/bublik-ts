@@ -144,8 +144,22 @@ export function buildDurationModal(reason: string): ModalBuilder {
 export function buildRequestEmbed(
   request: VacationRequest,
   member: GuildMember,
+  stats?: { totalAll: number; last30d: number; quickLast7d: number; lastEnd: Date | null },
 ): BublikEmbed {
   const endDate = new Date(Date.now() + request.durationMinutes * 60_000);
+
+  let statsText = '';
+  if (stats) {
+    const lastEndText = stats.lastEnd
+      ? formatDateMsk(stats.lastEnd)
+      : 'нет данных';
+    statsText =
+      `\n\n📊 **Статистика участника:**\n` +
+      `> 🔢 Всего отпусков: **${stats.totalAll}**\n` +
+      `> 📅 За 30 дней: **${stats.last30d}**\n` +
+      `> ⚡ Быстрых за 7 дней: **${stats.quickLast7d}**\n` +
+      `> 🕐 Последний отпуск до: ${lastEndText}`;
+  }
 
   return new BublikEmbed()
     .setColor(COLOR_REVIEW)
@@ -154,8 +168,9 @@ export function buildRequestEmbed(
       `> 👤 **Участник:** ${member.toString()} (${member.user.tag})\n` +
       `> 📝 **Причина:** ${request.reason}\n` +
       `> ⏳ **Срок:** ${formatDuration(request.durationMinutes)}\n` +
-      `> 📅 **До:** ${formatDateMsk(endDate)}\n\n` +
-      `⏰ Автоматическое отклонение через **3 часа**`,
+      `> 📅 **Ориент. до:** ~${formatDateMsk(endDate)}\n\n` +
+      `⏰ Автоматическое отклонение через **3 часа**` +
+      statsText,
     )
     .setThumbnail(member.displayAvatarURL({ size: 128 }))
     .setTimestamp();

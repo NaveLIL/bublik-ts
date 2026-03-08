@@ -31,6 +31,10 @@ import {
   updateRequest,
   getActiveVacation,
   getPendingRequest,
+  getLastCompletedVacationEnd,
+  countRecentVacations,
+  countRecentQuickLeaves,
+  getUserVacationStats,
 } from './database';
 
 import {
@@ -134,7 +138,8 @@ async function handleGoButton(
   interaction: ButtonInteraction,
   client: BublikClient,
 ): Promise<void> {
-  const guildId = interaction.guildId!;
+  if (!interaction.guildId) return;
+  const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
   const config = await getConfig(guildId);
@@ -179,6 +184,41 @@ async function handleGoButton(
     return;
   }
 
+  // Антиабьюз: кулдаун после последнего отпуска
+  if (config.cooldownDays > 0) {
+    const lastEnd = await getLastCompletedVacationEnd(guildId, userId);
+    if (lastEnd) {
+      const cooldownEnd = new Date(lastEnd.getTime() + config.cooldownDays * 24 * 60 * 60 * 1000);
+      if (Date.now() < cooldownEnd.getTime()) {
+        const leftMs = cooldownEnd.getTime() - Date.now();
+        const leftDays = Math.ceil(leftMs / (24 * 60 * 60 * 1000));
+        await interaction.reply({
+          embeds: [vacError(
+            `После возврата из отпуска должно пройти минимум **${config.cooldownDays} дн.** перед новым отпуском.\n` +
+            `Кулдаун истекает через **${leftDays} дн.**`,
+          )],
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+  }
+
+  // Антиабьюз: лимит отпусков за 30 дней
+  if (config.maxPerMonth > 0) {
+    const recent = await countRecentVacations(guildId, userId, 30);
+    if (recent >= config.maxPerMonth) {
+      await interaction.reply({
+        embeds: [vacError(
+          `Вы достигли лимита отпусков: **${config.maxPerMonth}** за последние 30 дней.\n` +
+          `У вас уже было **${recent}** отпусков за этот период.`,
+        )],
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
   // Показать меню выбора причины
   await interaction.reply({
     content: '📝 **Выберите причину отпуска:**',
@@ -210,7 +250,8 @@ async function handleDurationModal(
   reasonValue: string,
   client: BublikClient,
 ): Promise<void> {
-  const guildId = interaction.guildId!;
+  const guildId = interaction.guildId;
+  if (!guildId) return;
   const userId = interaction.user.id;
 
   const config = await getConfig(guildId);
@@ -279,6 +320,25 @@ async function handleDurationModal(
     return;
   }
 
+  // Повторная проверка антиабьюза (от race conditions)
+  if (config.cooldownDays > 0) {
+    const lastEnd = await getLastCompletedVacationEnd(guildId, userId);
+    if (lastEnd) {
+      const cooldownEnd = new Date(lastEnd.getTime() + config.cooldownDays * 24 * 60 * 60 * 1000);
+      if (Date.now() < cooldownEnd.getTime()) {
+        await interaction.reply({ embeds: [vacError('Кулдаун после отпуска ещё не истёк.')], ephemeral: true });
+        return;
+      }
+    }
+  }
+  if (config.maxPerMonth > 0) {
+    const recent = await countRecentVacations(guildId, userId, 30);
+    if (recent >= config.maxPerMonth) {
+      await interaction.reply({ embeds: [vacError('Лимит отпусков за 30 дней исчерпан.')], ephemeral: true });
+      return;
+    }
+  }
+
   await interaction.deferReply({ ephemeral: true });
 
   // Создать заявку
@@ -290,6 +350,9 @@ async function handleDurationModal(
     durationMinutes,
     configId: config.id,
   });
+
+  // Получить статистику для ревьюеров
+  const stats = await getUserVacationStats(guildId, userId);
 
   // Отправить в канал ревью
   if (config.reviewChannelId) {
@@ -303,7 +366,7 @@ async function handleDurationModal(
 
       const msg = await reviewChannel.send({
         content: pingText,
-        embeds: [buildRequestEmbed(request, member)],
+        embeds: [buildRequestEmbed(request, member, stats)],
         components: [buildRequestButtons(request.id)],
       });
 
@@ -334,7 +397,8 @@ async function handleReturnButton(
   interaction: ButtonInteraction,
   client: BublikClient,
 ): Promise<void> {
-  const guildId = interaction.guildId!;
+  if (!interaction.guildId) return;
+  const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
   const active = await getActiveVacation(guildId, userId);
@@ -377,7 +441,8 @@ async function handleQuickButton(
   interaction: ButtonInteraction,
   client: BublikClient,
 ): Promise<void> {
-  const guildId = interaction.guildId!;
+  if (!interaction.guildId) return;
+  const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
   const config = await getConfig(guildId);
@@ -407,6 +472,56 @@ async function handleQuickButton(
       ephemeral: true,
     });
     return;
+  }
+
+  // Антиабьюз: кулдаун после последнего отпуска
+  if (config.cooldownDays > 0) {
+    const lastEnd = await getLastCompletedVacationEnd(guildId, userId);
+    if (lastEnd) {
+      const cooldownEnd = new Date(lastEnd.getTime() + config.cooldownDays * 24 * 60 * 60 * 1000);
+      if (Date.now() < cooldownEnd.getTime()) {
+        const leftMs = cooldownEnd.getTime() - Date.now();
+        const leftDays = Math.ceil(leftMs / (24 * 60 * 60 * 1000));
+        await interaction.reply({
+          embeds: [vacError(
+            `Кулдаун после отпуска: осталось **${leftDays} дн.**\n` +
+            `Минимальный перерыв между отпусками: **${config.cooldownDays} дн.**`,
+          )],
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+  }
+
+  // Антиабьюз: лимит быстрых отпусков за неделю
+  if (config.maxQuickPerWeek > 0) {
+    const quickRecent = await countRecentQuickLeaves(guildId, userId, 7);
+    if (quickRecent >= config.maxQuickPerWeek) {
+      await interaction.reply({
+        embeds: [vacError(
+          `Вы достигли лимита быстрых отпусков: **${config.maxQuickPerWeek}** за 7 дней.\n` +
+          `Использовано: **${quickRecent}/${config.maxQuickPerWeek}**`,
+        )],
+        ephemeral: true,
+      });
+      return;
+    }
+  }
+
+  // Антиабьюз: лимит отпусков за 30 дней
+  if (config.maxPerMonth > 0) {
+    const recent = await countRecentVacations(guildId, userId, 30);
+    if (recent >= config.maxPerMonth) {
+      await interaction.reply({
+        embeds: [vacError(
+          `Лимит отпусков за 30 дней: **${config.maxPerMonth}**.\n` +
+          `Использовано: **${recent}/${config.maxPerMonth}**`,
+        )],
+        ephemeral: true,
+      });
+      return;
+    }
   }
 
   await interaction.deferReply({ ephemeral: true });
@@ -476,7 +591,7 @@ async function handleApproveButton(
   const config = request.config;
 
   // Проверка роли ревьюера
-const isReviewer = config.reviewerRoleIds.some((id: string) => reviewer.roles.cache.has(id));
+  const isReviewer = config.reviewerRoleIds.some((id: string) => reviewer.roles.cache.has(id));
   if (!isReviewer) {
     await interaction.reply({ embeds: [vacError('У вас нет прав на рассмотрение заявок.')], ephemeral: true });
     return;

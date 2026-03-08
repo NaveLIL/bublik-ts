@@ -175,6 +175,11 @@ model VacationConfig {
   maxDurationDays Int       @default(30)              // максимальная длительность в днях
   quickDurationH  Int       @default(12)              // длительность «Не смогу сегодня» в часах
 
+  // Антиабьюз
+  cooldownDays    Int       @default(7)               // дней кулдауна после возврата из отпуска
+  maxPerMonth     Int       @default(3)               // макс. отпусков за 30 дней
+  maxQuickPerWeek Int       @default(2)               // макс. быстрых отпусков за 7 дней
+
   primeTimeStart  Int       @default(17)              // начало прайм-тайма (МСК, 0-23)
   primeTimeEnd    Int       @default(1)               // конец прайм-тайма (МСК, 0-23)
   primeTimeBuffer Int       @default(1)               // блокировка за N ч до прайм-тайма
