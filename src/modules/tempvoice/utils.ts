@@ -21,18 +21,35 @@ import { getTrusted, getBlocked } from './database';
 const rateLimits = new Map<string, number[]>();
 const creationCooldowns = new Map<string, number>();
 
-/** Периодическая очистка */
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, timestamps] of rateLimits) {
-    const valid = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
-    if (valid.length === 0) rateLimits.delete(key);
-    else rateLimits.set(key, valid);
+/** Периодическая очистка (сохраняем ref для остановки) */
+let _rateLimitCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function startRateLimitCleanup(): void {
+  if (_rateLimitCleanupTimer) return;
+  _rateLimitCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamps] of rateLimits) {
+      const valid = timestamps.filter((t) => now - t < RATE_LIMIT_WINDOW_MS);
+      if (valid.length === 0) rateLimits.delete(key);
+      else rateLimits.set(key, valid);
+    }
+    for (const [key, ts] of creationCooldowns) {
+      if (now - ts > CREATION_COOLDOWN_MS) creationCooldowns.delete(key);
+    }
+  }, 60_000);
+}
+
+export function stopRateLimitCleanup(): void {
+  if (_rateLimitCleanupTimer) {
+    clearInterval(_rateLimitCleanupTimer);
+    _rateLimitCleanupTimer = null;
   }
-  for (const [key, ts] of creationCooldowns) {
-    if (now - ts > CREATION_COOLDOWN_MS) creationCooldowns.delete(key);
-  }
-}, 60_000);
+  rateLimits.clear();
+  creationCooldowns.clear();
+}
+
+// Запуск при загрузке модуля
+startRateLimitCleanup();
 
 /** Проверить rate-limit. Возвращает true если лимит превышен */
 export function isRateLimited(userId: string): boolean {
@@ -113,6 +130,11 @@ export async function getAccessLevel(
   const blocked = await getBlocked(channelData.id);
   if (blocked.includes(member.id)) return AccessLevel.Blocked;
 
+  // Наградная роль (выше бустера)
+  if (generator.rewardRoleId && member.roles.cache.has(generator.rewardRoleId)) {
+    return AccessLevel.Reward;
+  }
+
   // Доверенный
   const trusted = await getTrusted(channelData.id);
   if (trusted.includes(member.id)) return AccessLevel.Trusted;
@@ -128,11 +150,12 @@ export function canManage(level: AccessLevel): boolean {
   return level === AccessLevel.Owner || level === AccessLevel.Moderator;
 }
 
-/** Проверить, расширенные ли права (бустер+) */
+/** Проверить, расширенные ли права (бустер+, наградная роль+) */
 export function hasElevated(level: AccessLevel): boolean {
   return (
     level === AccessLevel.Owner ||
     level === AccessLevel.Moderator ||
+    level === AccessLevel.Reward ||
     level === AccessLevel.Booster
   );
 }

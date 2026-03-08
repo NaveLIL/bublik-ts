@@ -23,6 +23,7 @@ import { logger } from '../../core/Logger';
 
 import { handleVoiceStateUpdate, restoreChannels, startCleanupTimer, stopCleanupTimer } from './lifecycle';
 import { handleTempVoiceButton, handleRenameModal, handleLimitModal } from './handlers';
+import { stopRateLimitCleanup } from './utils';
 import { TV_PREFIX } from './constants';
 
 import voiceCommand from './commands/voice';
@@ -92,6 +93,7 @@ const tempvoiceModule: BublikModule = {
 
   async onUnload(client: BublikClient): Promise<void> {
     stopCleanupTimer();
+    stopRateLimitCleanup();
     log.info('Модуль временных голосовых каналов выгружен');
   },
 };

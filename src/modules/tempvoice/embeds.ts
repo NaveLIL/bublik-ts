@@ -8,6 +8,7 @@ import {
   ButtonStyle,
   StringSelectMenuBuilder,
   UserSelectMenuBuilder,
+  GuildMember,
 } from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
 import { ChannelState, PanelPage, TV_PREFIX, TV_SEP } from './constants';
@@ -19,6 +20,7 @@ const COLOR_WARNING  = 0xfee75c;
 const COLOR_DANGER   = 0xed4245;
 const COLOR_LOCKED   = 0xff9b21;
 const COLOR_HIDDEN   = 0x99aab5;
+const COLOR_REWARD   = 0xf1c40f; // gold
 
 // ═══════════════════════════════════════════════
 //  Утилита customId
@@ -256,8 +258,9 @@ export function buildSettingsPageEmbed(
       {
         name: '💡 Подсказка',
         value:
-          '**Бустеры сервера** получают доступ к повышенному битрейту ' +
-          'и расширенному лимиту участников.',
+          '**Бустеры** получают доступ к переименованию, лимиту и битрейту.\n' +
+          '**🏆 Наградная роль** (за активность в войсе) даёт ещё и смену региона. ' +
+          'Используйте `/voice stats` для проверки прогресса.',
       },
     )
     .addFields({
@@ -350,6 +353,30 @@ export function tvWarn(text: string): BublikEmbed {
 
 export function tvInfo(text: string): BublikEmbed {
   return new BublikEmbed().setColor(COLOR_PANEL).setDescription(text);
+}
+
+// ═══════════════════════════════════════════════
+//  Объявление о награде
+// ═══════════════════════════════════════════════
+
+export function buildRewardAnnouncement(
+  member: GuildMember,
+  totalHours: number,
+  rewardRoleId: string,
+): BublikEmbed {
+  return new BublikEmbed()
+    .setColor(COLOR_REWARD)
+    .setAuthor({ name: '🏆 Награда за активность!', iconURL: member.displayAvatarURL() })
+    .setDescription(
+      `Поздравляем **${member.displayName}**! 🎉\n\n` +
+      `Проведя **${totalHours} часов** в голосовых каналах, ` +
+      `${member.toString()} заслужил роль <@&${rewardRoleId}>!\n\n` +
+      `> 🎙️ Теперь доступны расширенные возможности в temp-каналах:\n` +
+      `> ✏️ Переименование · 🔢 Лимит · 🎚️ Битрейт · 🌐 Регион\n\n` +
+      `Общайтесь больше — получайте больше!`,
+    )
+    .setThumbnail(member.displayAvatarURL({ size: 128 }))
+    .setTimestamp();
 }
 
 // ═══════════════════════════════════════════════

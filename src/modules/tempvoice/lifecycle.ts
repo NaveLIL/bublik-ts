@@ -32,6 +32,9 @@ import {
   getGuildChannels,
   getInactiveChannels,
   getUserSettings,
+  addVoiceMinutes,
+  markRewardGranted,
+  getGeneratorById,
 } from './database';
 
 import {
@@ -45,12 +48,16 @@ import {
 import {
   buildMainPageEmbed,
   buildMainPageButtons,
+  buildRewardAnnouncement,
 } from './embeds';
 
 const log = logger.child('TempVoice:Lifecycle');
 
 // Таймеры удаления пустых каналов (channelId → timeout)
 const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+// Сессии голосового времени: `${guildId}:${userId}` → { joinedAt, channelId, generatorId }
+const voiceSessions = new Map<string, { joinedAt: number; channelId: string; generatorId: string }>();
 
 // Таймер очистки неактивных каналов
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -108,6 +115,16 @@ async function onJoinChannel(state: VoiceState, client: BublikClient): Promise<v
 
     // Обновить lastActivity
     await updateChannel(channelId, {}).catch(() => null);
+
+    // Начать отслеживание голосового времени
+    const sessionKey = `${member.guild.id}:${member.id}`;
+    if (!voiceSessions.has(sessionKey)) {
+      voiceSessions.set(sessionKey, {
+        joinedAt: Date.now(),
+        channelId,
+        generatorId: channelData.generatorId,
+      });
+    }
   }
 }
 
@@ -195,6 +212,14 @@ async function createTempChannel(
     // Отправить панель управления в текстовый чат VC
     await sendControlPanel(vc, channelData, generator, member);
 
+    // Начать отслеживание voice time
+    const sessionKey = `${state.guild.id}:${member.id}`;
+    voiceSessions.set(sessionKey, {
+      joinedAt: Date.now(),
+      channelId: vc.id,
+      generatorId: generator.id,
+    });
+
     log.info(`Создан канал "${channelName}" (${vc.id}) для ${member.user.tag}`);
   } catch (err) {
     log.error(`Ошибка создания temp-канала для ${member.user.tag}`, { error: String(err) });
@@ -261,6 +286,34 @@ export async function sendControlPanel(
 
 async function onLeaveChannel(state: VoiceState, client: BublikClient): Promise<void> {
   const channelId = state.channelId!;
+  const member = state.member;
+
+  // Засчитать голосовое время при выходе
+  if (member && !member.user.bot) {
+    const sessionKey = `${state.guild.id}:${member.id}`;
+    const session = voiceSessions.get(sessionKey);
+    if (session) {
+      voiceSessions.delete(sessionKey);
+      const durationMs = Date.now() - session.joinedAt;
+      const minutes = Math.floor(durationMs / 60_000);
+
+      if (minutes > 0) {
+        try {
+          const updated = await addVoiceMinutes(member.id, state.guild.id, minutes);
+
+          // Проверить порог наградной роли
+          if (!updated.rewardGranted) {
+            const generator = await getGeneratorById(session.generatorId);
+            if (generator?.rewardRoleId && updated.totalVoiceMinutes >= generator.rewardThresholdMin) {
+              await grantRewardRole(member, generator, updated.totalVoiceMinutes, client);
+            }
+          }
+        } catch (err) {
+          log.error(`Ошибка сохранения voice time для ${member.user.tag}`, { error: String(err) });
+        }
+      }
+    }
+  }
 
   const channelData = await getChannel(channelId);
   if (!channelData) return;
@@ -303,6 +356,45 @@ async function onLeaveChannel(state: VoiceState, client: BublikClient): Promise<
     }, EMPTY_DELETE_DELAY_MS);
 
     deleteTimers.set(channelId, timer);
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  Выдача наградной роли
+// ═══════════════════════════════════════════════
+
+async function grantRewardRole(
+  member: GuildMember,
+  generator: TempVoiceGenerator,
+  totalMinutes: number,
+  client: BublikClient,
+): Promise<void> {
+  if (!generator.rewardRoleId) return;
+
+  try {
+    // Выдать роль
+    await member.roles.add(generator.rewardRoleId, 'TempVoice: наградная роль за активность');
+    await markRewardGranted(member.id, member.guild.id);
+
+    const hours = Math.floor(totalMinutes / 60);
+
+    log.info(`Награда: ${member.user.tag} получил роль за ${hours}ч в войсе (${member.guild.name})`);
+
+    // Отправить объявление
+    if (generator.rewardAnnounceChId) {
+      try {
+        const announceChannel = await member.guild.channels.fetch(generator.rewardAnnounceChId).catch(() => null);
+        if (announceChannel && announceChannel.isTextBased()) {
+          await announceChannel.send({
+            embeds: [buildRewardAnnouncement(member, hours, generator.rewardRoleId)],
+          });
+        }
+      } catch (err) {
+        log.warn('Не удалось отправить объявление о награде', { error: String(err) });
+      }
+    }
+  } catch (err) {
+    log.error(`Ошибка выдачи наградной роли для ${member.user.tag}`, { error: String(err) });
   }
 }
 
@@ -392,4 +484,11 @@ export function stopCleanupTimer(): void {
     clearTimeout(timer);
   }
   deleteTimers.clear();
+  voiceSessions.clear();
+}
+
+/** Получить текущую сессию пользователя (для /voice stats) */
+export function getVoiceSession(guildId: string, userId: string): { joinedAt: number } | null {
+  const session = voiceSessions.get(`${guildId}:${userId}`);
+  return session ?? null;
 }

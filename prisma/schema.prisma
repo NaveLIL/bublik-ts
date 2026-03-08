@@ -71,6 +71,11 @@ model TempVoiceGenerator {
   immuneRoleIds  String[] @default([])               // модераторские роли — обходят все ограничения
   boosterPerks   Boolean  @default(true)             // бустеры получают расширенные права
 
+  // Наградная роль
+  rewardRoleId       String?                         // роль для самых активных пользователей войсов
+  rewardThresholdMin Int      @default(3000)          // порог в минутах (3000 = 50ч)
+  rewardAnnounceChId String?                          // канал для объявлений о наградах
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -138,6 +143,10 @@ model TempVoiceUserSettings {
   savedLimit   Int?
   savedBitrate Int?
   savedRegion  String?
+
+  // Статистика войса (для наградной роли)
+  totalVoiceMinutes Int @default(0)
+  rewardGranted     Boolean @default(false)
 
   @@unique([userId, guildId])
   @@map("tempvoice_user_settings")

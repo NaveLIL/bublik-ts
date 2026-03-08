@@ -13,6 +13,7 @@ export enum ChannelState {
 export enum AccessLevel {
   Owner = 'owner',
   Moderator = 'moderator',   // immuneRole
+  Reward = 'reward',         // награда за активность (расширенные права)
   Booster = 'booster',       // server boosters с расширенными правами
   Trusted = 'trusted',       // доверенные (добавлены владельцем)
   Normal = 'normal',         // обычные пользователи

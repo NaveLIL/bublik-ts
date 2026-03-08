@@ -161,10 +161,17 @@ export async function handleTempVoiceButton(
       return;
     }
 
-    // Действия, доступные бустерам (rename, limit, bitrate)
+    // Действия, доступные бустерам / наградным (rename, limit, bitrate)
     const boosterActions = new Set(['rename', 'limit', 'bitrate']);
-    if (boosterActions.has(action) && hasElevated(accessLevel)) {
-      // Бустер, модератор или владелец — пропускаем
+    // Наградная роль даёт ещё и region  
+    const rewardActions = new Set(['rename', 'limit', 'bitrate', 'region']);
+
+    const isRewardPlus = accessLevel === AccessLevel.Owner || accessLevel === AccessLevel.Moderator || accessLevel === AccessLevel.Reward;
+
+    if (rewardActions.has(action) && isRewardPlus) {
+      // Reward+, модератор или владелец — пропускаем
+    } else if (boosterActions.has(action) && hasElevated(accessLevel)) {
+      // Бустер — пропускаем (rename, limit, bitrate)
     } else if (!canManage(accessLevel)) {
       await interaction.reply({
         embeds: [tvError('У вас недостаточно прав для этого действия.')],
@@ -327,6 +334,18 @@ export async function handleRenameModal(
     return;
   }
 
+  // Проверка прав: rename доступен бустерам+
+  const generator = await getGeneratorById(channelData.generatorId);
+  if (!generator) {
+    await interaction.reply({ embeds: [tvError('Генератор не найден.')], ephemeral: true });
+    return;
+  }
+  const accessLevel = await getAccessLevel(member, channelData, generator);
+  if (!hasElevated(accessLevel)) {
+    await interaction.reply({ embeds: [tvError('У вас недостаточно прав.')], ephemeral: true });
+    return;
+  }
+
   await vc.setName(newName).catch(() => null);
 
   await updateChannel(channelData.id, {
@@ -394,6 +413,18 @@ export async function handleLimitModal(
   }
 
   const generator = await getGeneratorById(channelData.generatorId);
+  if (!generator) {
+    await interaction.reply({ embeds: [tvError('Генератор не найден.')], ephemeral: true });
+    return;
+  }
+
+  // Проверка прав: limit доступен бустерам+
+  const accessLevel = await getAccessLevel(member, channelData, generator);
+  if (!hasElevated(accessLevel)) {
+    await interaction.reply({ embeds: [tvError('У вас недостаточно прав.')], ephemeral: true });
+    return;
+  }
+
   if (generator) {
     if (limit > 0 && (limit < generator.minUserLimit || limit > generator.maxUserLimit)) {
       await interaction.reply({
@@ -578,6 +609,20 @@ async function handleTrust(
       return;
     }
 
+    // Нельзя добавить бота
+    const targetUser = await interaction.guild!.members.fetch(targetId).catch(() => null);
+    if (targetUser?.user.bot) {
+      await sel.update({ content: '❌ Нельзя добавить бота.', components: [] });
+      return;
+    }
+
+    // Лимит доверенных
+    const currentTrusted = await getTrusted(channelData.id);
+    if (currentTrusted.length >= 25) {
+      await sel.update({ content: '❌ Максимум 25 доверенных пользователей.', components: [] });
+      return;
+    }
+
     await addTrusted(channelData.id, targetId);
 
     // Обновить permissions
@@ -703,8 +748,19 @@ async function handleBlock(
       return;
     }
 
-    // Нельзя блокировать модератора
+    // Нельзя блокировать бота или модератора
     const targetMember = await interaction.guild!.members.fetch(targetId).catch(() => null);
+    if (targetMember?.user.bot) {
+      await sel.update({ content: '❌ Нельзя заблокировать бота.', components: [] });
+      return;
+    }
+
+    // Лимит заблокированных
+    const currentBlocked = await getBlocked(channelData.id);
+    if (currentBlocked.length >= 25) {
+      await sel.update({ content: '❌ Максимум 25 заблокированных пользователей.', components: [] });
+      return;
+    };
     if (targetMember && generator.immuneRoleIds.length > 0 && generator.immuneRoleIds.some((rid) => targetMember.roles.cache.has(rid))) {
       await sel.update({ content: '❌ Нельзя заблокировать модератора.', components: [] });
       return;
@@ -816,7 +872,12 @@ async function handleKick(
   member: GuildMember,
 ): Promise<void> {
   const kickable = vc.members
-    .filter((m) => m.id !== member.id && m.id !== client.user!.id)
+    .filter((m) => {
+      if (m.id === member.id || m.id === client.user!.id) return false;
+      // Нельзя кикать модераторов (immuneRoleIds)
+      if (generator.immuneRoleIds.length > 0 && generator.immuneRoleIds.some((rid) => m.roles.cache.has(rid))) return false;
+      return true;
+    })
     .map((m) => ({ id: m.id, tag: m.user.tag }));
 
   if (kickable.length === 0) {

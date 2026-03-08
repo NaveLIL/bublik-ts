@@ -252,3 +252,37 @@ export async function saveUserSettings(
     update: data,
   });
 }
+
+/** Добавить минуты голосового времени */
+export async function addVoiceMinutes(
+  userId: string,
+  guildId: string,
+  minutes: number,
+): Promise<TempVoiceUserSettings> {
+  const db = getDatabase();
+  return db.tempVoiceUserSettings.upsert({
+    where: { userId_guildId: { userId, guildId } },
+    create: { userId, guildId, totalVoiceMinutes: minutes },
+    update: { totalVoiceMinutes: { increment: minutes } },
+  });
+}
+
+/** Отметить что награда выдана */
+export async function markRewardGranted(userId: string, guildId: string): Promise<void> {
+  const db = getDatabase();
+  await db.tempVoiceUserSettings.upsert({
+    where: { userId_guildId: { userId, guildId } },
+    create: { userId, guildId, rewardGranted: true },
+    update: { rewardGranted: true },
+  });
+}
+
+/** Получить топ пользователей по голосовому времени */
+export async function getVoiceLeaderboard(guildId: string, limit = 10): Promise<TempVoiceUserSettings[]> {
+  const db = getDatabase();
+  return db.tempVoiceUserSettings.findMany({
+    where: { guildId, totalVoiceMinutes: { gt: 0 } },
+    orderBy: { totalVoiceMinutes: 'desc' },
+    take: limit,
+  });
+}
