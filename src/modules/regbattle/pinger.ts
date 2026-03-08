@@ -359,6 +359,8 @@ async function refreshIndividualQueue(guild: Guild, config: any, state: GuildPin
         // Исключить тех, кто уже в ПБ-войсе
         const voiceId = m.voice.channelId;
         if (voiceId && pbChannelIds.includes(voiceId)) return false;
+        // Исключить тех, кто играл сегодня
+        if (config.playedTodayRoleId && m.roles.cache.has(config.playedTodayRoleId)) return false;
         return true;
       })
       .map((m) => m.id);

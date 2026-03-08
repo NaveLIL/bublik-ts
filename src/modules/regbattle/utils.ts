@@ -96,12 +96,13 @@ function canManageRole(guild: Guild, role: Role | undefined): boolean {
 }
 
 /**
- * Выдать inSquadRole, снять pingRole (вход в отряд)
+ * Выдать inSquadRole, снять pingRole и playedTodayRole (вход в отряд)
  */
 export async function applySquadRoles(
   member: GuildMember,
   pingRoleId: string | null,
   inSquadRoleId: string | null,
+  playedTodayRoleId?: string | null,
 ): Promise<void> {
   const guild = member.guild;
   const tag = member.user.tag;
@@ -119,6 +120,19 @@ export async function applySquadRoles(
         log.info(`✔ Снята pingRole ${role.name} у ${tag}`);
       } catch (err) {
         log.error(`✗ Не удалось снять pingRole ${role.name} у ${tag}`, { error: String(err) });
+      }
+    }
+  }
+
+  // Снять роль «Играл сегодня» (игрок снова в бою)
+  if (playedTodayRoleId) {
+    const role = guild.roles.cache.get(playedTodayRoleId);
+    if (role && canManageRole(guild, role) && member.roles.cache.has(playedTodayRoleId)) {
+      try {
+        await member.roles.remove(playedTodayRoleId, 'RegBattle: снова в бою');
+        log.info(`✔ Снята playedTodayRole ${role.name} у ${tag} (вошёл снова)`);
+      } catch (err) {
+        log.error(`✗ Не удалось снять playedTodayRole у ${tag}`, { error: String(err) });
       }
     }
   }
@@ -185,6 +199,89 @@ export async function restoreSquadRoles(
       }
     }
   }
+}
+
+/**
+ * Выход из отряда: снять inSquadRole + выдать playedTodayRole (вместо pingRole).
+ * Вызывается когда участник провёл достаточно времени в ПБ-войсе.
+ */
+export async function applyPlayedTodayRole(
+  member: GuildMember,
+  inSquadRoleId: string | null,
+  playedTodayRoleId: string,
+): Promise<void> {
+  const guild = member.guild;
+  const tag = member.user.tag;
+
+  // Снять роль «в отряде»
+  if (inSquadRoleId) {
+    const role = guild.roles.cache.get(inSquadRoleId);
+    if (role && canManageRole(guild, role) && member.roles.cache.has(inSquadRoleId)) {
+      try {
+        await member.roles.remove(inSquadRoleId, 'RegBattle: выход — играл сегодня');
+        log.info(`✔ Снята inSquadRole ${role.name} у ${tag}`);
+      } catch (err) {
+        log.error(`✗ Не удалось снять inSquadRole у ${tag}`, { error: String(err) });
+      }
+    }
+  }
+
+  // Выдать роль «Играл сегодня»
+  const ptRole = guild.roles.cache.get(playedTodayRoleId);
+  if (!ptRole) {
+    log.warn(`playedTodayRole ${playedTodayRoleId} не найдена в кэше гильдии`);
+  } else if (!canManageRole(guild, ptRole)) {
+    // предупреждение уже залогировано
+  } else if (!member.roles.cache.has(playedTodayRoleId)) {
+    try {
+      await member.roles.add(playedTodayRoleId, 'RegBattle: играл сегодня');
+      log.info(`✔ Выдана playedTodayRole ${ptRole.name} для ${tag}`);
+    } catch (err) {
+      log.error(`✗ Не удалось выдать playedTodayRole для ${tag}`, { error: String(err) });
+    }
+  }
+}
+
+/**
+ * Сбросить роль «Играл сегодня» у всех участников гильдии.
+ * Убирает playedTodayRole, возвращает pingRole.
+ */
+export async function resetAllPlayedTodayRoles(
+  guild: Guild,
+  pingRoleId: string | null,
+  playedTodayRoleId: string,
+): Promise<number> {
+  const ptRole = guild.roles.cache.get(playedTodayRoleId);
+  if (!ptRole) return 0;
+
+  let count = 0;
+  for (const [, member] of ptRole.members) {
+    if (member.user.bot) continue;
+
+    try {
+      await member.roles.remove(playedTodayRoleId, 'RegBattle: ежедневный сброс');
+      log.info(`✔ Сброшена playedTodayRole у ${member.user.tag}`);
+    } catch (err) {
+      log.error(`✗ Не удалось снять playedTodayRole у ${member.user.tag}`, { error: String(err) });
+    }
+
+    // Вернуть pingRole (если не в ПБ-войсе)
+    if (pingRoleId && !member.roles.cache.has(pingRoleId)) {
+      const pingRole = guild.roles.cache.get(pingRoleId);
+      if (pingRole && canManageRole(guild, pingRole)) {
+        try {
+          await member.roles.add(pingRoleId, 'RegBattle: сброс — пинг-роль возвращена');
+          log.info(`✔ Возвращена pingRole для ${member.user.tag} (сброс)`);
+        } catch (err) {
+          log.error(`✗ Не удалось вернуть pingRole для ${member.user.tag}`, { error: String(err) });
+        }
+      }
+    }
+
+    count++;
+  }
+
+  return count;
 }
 
 // ═══════════════════════════════════════════════

@@ -249,6 +249,10 @@ model RegBattleConfig {
 
   pingEscalateAfter Int     @default(3)                 // сколько пингов роли до эскалации к именным
 
+  playedTodayRoleId String?                             // роль «Играл сегодня» (не пингуется до сброса)
+  playedMinMinutes  Int      @default(15)               // мин. минут в ПБ-войсе для получения роли
+  playedResetHour   Int      @default(23)               // час сброса роли (МСК, 0-23)
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

@@ -56,3 +56,12 @@ export const DEFAULT_PING_ESCALATE_AFTER = 6;
 
 /** Кулдаун создания канала (мс) */
 export const CREATION_COOLDOWN_MS = 10_000; // 10 секунд
+
+/** Мин. минут в ПБ-войсе для роли «Играл сегодня» (по умолчанию) */
+export const DEFAULT_PLAYED_MIN_MINUTES = 15;
+
+/** Час сброса роли «Играл сегодня» по МСК (по умолчанию) */
+export const DEFAULT_PLAYED_RESET_HOUR = 23;
+
+/** Интервал проверки сброса «Играл сегодня» */
+export const PLAYED_RESET_CHECK_INTERVAL_MS = 60_000; // 1 минута

@@ -24,6 +24,7 @@ import { errorReporter } from '../../core/ErrorReporter';
 import {
   EMPTY_DELETE_DELAY_MS,
   ROLE_INTEGRITY_INTERVAL_MS,
+  PLAYED_RESET_CHECK_INTERVAL_MS,
 } from './constants';
 
 import {
@@ -41,6 +42,8 @@ import {
   getSquadMemberCount,
   applySquadRoles,
   restoreSquadRoles,
+  applyPlayedTodayRole,
+  resetAllPlayedTodayRoles,
   acquireCreationLock,
   releaseCreationLock,
   isCreationCooldown,
@@ -63,6 +66,40 @@ const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Таймер проверки целостности ролей
 let integrityTimer: ReturnType<typeof setInterval> | null = null;
+
+// Таймер сброса «Играл сегодня»
+let playedResetTimer: ReturnType<typeof setInterval> | null = null;
+const playedResetDone = new Set<string>(); // формат 'guildId:YYYY-MM-DD' чтобы не сбрасывать дважды
+
+// Трекинг времени в ПБ-войсе: guildId → Map<memberId, joinTimestampMs>
+const voiceSessionMap = new Map<string, Map<string, number>>();
+
+/** Записать время входа в ПБ-войс */
+function trackVoiceJoin(guildId: string, memberId: string): void {
+  let guildMap = voiceSessionMap.get(guildId);
+  if (!guildMap) {
+    guildMap = new Map();
+    voiceSessionMap.set(guildId, guildMap);
+  }
+  if (!guildMap.has(memberId)) {
+    guildMap.set(memberId, Date.now());
+  }
+}
+
+/** Получить время в ПБ-войсе (минуты) и удалить трек */
+function trackVoiceLeave(guildId: string, memberId: string): number {
+  const guildMap = voiceSessionMap.get(guildId);
+  if (!guildMap) return 0;
+  const joinedAt = guildMap.get(memberId);
+  if (!joinedAt) return 0;
+  guildMap.delete(memberId);
+  return (Date.now() - joinedAt) / 60_000; // минуты
+}
+
+/** Очистить все треки гильдии */
+export function clearVoiceSessions(guildId: string): void {
+  voiceSessionMap.delete(guildId);
+}
 
 // ═══════════════════════════════════════════════
 //  voiceStateUpdate — ядро системы
@@ -115,9 +152,12 @@ async function onJoinChannel(state: VoiceState, client: BublikClient): Promise<v
     cancelDeleteTimer(squad.voiceChannelId);
     if (squad.airChannelId) cancelDeleteTimer(squad.airChannelId);
 
-    // Ротация ролей
+    // Трек времени в ПБ-войсе
+    trackVoiceJoin(guildId, member.id);
+
+    // Ротация ролей (снять ping + playedToday, выдать inSquad)
     log.debug(`Ротация ролей (вход в ПБ-канал): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
-    await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+    await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId, config.playedTodayRoleId);
 
     // Обновить панель (счётчик)
     await updateControlPanel(squad, state.guild, client);
@@ -210,9 +250,12 @@ async function handleMasterJoin(
     // Переместить командира
     await member.voice.setChannel(vc, 'Создание отряда ПБ').catch(() => null);
 
+    // Трек времени в ПБ-войсе для командира
+    trackVoiceJoin(guildId, member.id);
+
     // Ротация ролей для командира
     log.debug(`Ротация ролей (командир): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
-    await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+    await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId, config.playedTodayRoleId);
 
     setCreationCooldown(member.id);
 
@@ -345,11 +388,23 @@ async function onLeaveChannel(state: VoiceState, client: BublikClient): Promise<
     // Проверить: может он перешёл в другой отряд
     const otherSquad = newChannelId ? await getSquadByAnyVoice(newChannelId) : null;
     if (!otherSquad) {
-      // Полностью покинул ПБ → восстановить роли
-      log.debug(`Восстановление ролей (выход из ПБ): ${member.user.tag} → ping=${config.pingRoleId} squad=${config.inSquadRoleId}`);
-      await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+      // Полностью покинул ПБ.
+      // Проверить время в ПБ-войсе → роль «Играл сегодня»
+      const minutesPlayed = trackVoiceLeave(state.guild.id, member.id);
+      const minRequired = config.playedMinMinutes ?? 15;
+
+      if (config.playedTodayRoleId && minutesPlayed >= minRequired) {
+        // Провёл достаточно → playedTodayRole вместо pingRole
+        log.info(`Играл сегодня: ${member.user.tag} (${Math.round(minutesPlayed)} мин ≥ ${minRequired})`);
+        await applyPlayedTodayRole(member, config.inSquadRoleId, config.playedTodayRoleId);
+      } else {
+        // Мало времени или роль не настроена → обычное восстановление
+        log.debug(`Восстановление ролей (выход из ПБ): ${member.user.tag} (${Math.round(minutesPlayed)} мин < ${minRequired})`);
+        await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+      }
+    } else {
+      // Перешёл в другой отряд — не останавливать трек (он всё ещё в ПБ)
     }
-    // Если перешёл в другой отряд — роли сохраняются (inSquadRole)
   }
 
   // Обновить панель
@@ -471,15 +526,17 @@ export async function restoreSquads(client: BublikClient): Promise<void> {
           if (mainEmpty && airEmpty) {
             scheduleSquadDeletion(squad, guild, client);
           } else {
-            // Проверить роли у всех участников в каналах
+            // Проверить роли у всех участников в каналах + засидить войс-трек
             const mainMembers = (vc as VoiceChannel).members.filter((m) => !m.user.bot);
             for (const [, m] of mainMembers) {
-              await applySquadRoles(m, config.pingRoleId, config.inSquadRoleId);
+              trackVoiceJoin(guild.id, m.id);
+              await applySquadRoles(m, config.pingRoleId, config.inSquadRoleId, config.playedTodayRoleId);
             }
             if (airVc && airVc.type === ChannelType.GuildVoice) {
               const airMembers = (airVc as VoiceChannel).members.filter((m) => !m.user.bot);
               for (const [, m] of airMembers) {
-                await applySquadRoles(m, config.pingRoleId, config.inSquadRoleId);
+                trackVoiceJoin(guild.id, m.id);
+                await applySquadRoles(m, config.pingRoleId, config.inSquadRoleId, config.playedTodayRoleId);
               }
             }
           }
@@ -516,6 +573,11 @@ export function stopRoleIntegrityChecker(): void {
   if (integrityTimer) {
     clearInterval(integrityTimer);
     integrityTimer = null;
+  }
+
+  if (playedResetTimer) {
+    clearInterval(playedResetTimer);
+    playedResetTimer = null;
   }
 
   // Отменить все таймеры удаления
@@ -571,7 +633,7 @@ async function checkRoleIntegrity(client: BublikClient): Promise<void> {
         (config.inSquadRoleId && !member.roles.cache.has(config.inSquadRoleId));
 
       if (needsApply) {
-        await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+        await applySquadRoles(member, config.pingRoleId, config.inSquadRoleId, config.playedTodayRoleId);
         log.info(`Integrity ✔: ${member.user.tag} — выданы роли ПБ (находится в войсе)`);
       }
     }
@@ -584,9 +646,78 @@ async function checkRoleIntegrity(client: BublikClient): Promise<void> {
       if (member.user.bot) continue;
 
       if (!membersInPb.has(member.id)) {
-        await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
-        log.info(`Integrity ✖: ${member.user.tag} — убраны роли ПБ (не в войсе)`);
+        // НЕ восстанавливать pingRole если у него playedTodayRole (играл сегодня)
+        // Но inSquadRole снять нужно в любом случае
+        const hasPlayedToday = config.playedTodayRoleId && member.roles.cache.has(config.playedTodayRoleId);
+        if (hasPlayedToday) {
+          // Снять только inSquadRole, не трогать pingRole
+          await applyPlayedTodayRole(member, config.inSquadRoleId, config.playedTodayRoleId);
+          log.info(`Integrity ○: ${member.user.tag} — играл сегодня, снята только inSquadRole`);
+        } else {
+          await restoreSquadRoles(member, config.pingRoleId, config.inSquadRoleId);
+          log.info(`Integrity ✖: ${member.user.tag} — убраны роли ПБ (не в войсе)`);
+        }
       }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  Сброс роли «Играл сегодня» — ежедневный
+//  Проверяется каждую минуту, срабатывает 1 раз
+//  в указанный час (МСК).
+// ═══════════════════════════════════════════════
+
+export function startPlayedResetScheduler(client: BublikClient): void {
+  if (playedResetTimer) return;
+
+  playedResetTimer = setInterval(async () => {
+    try {
+      await checkPlayedReset(client);
+    } catch (err) {
+      log.error('Ошибка сброса «Играл сегодня»', { error: String(err) });
+    }
+  }, PLAYED_RESET_CHECK_INTERVAL_MS);
+
+  log.info('Планировщик сброса «Играл сегодня» запущен');
+}
+
+export function stopPlayedResetScheduler(): void {
+  if (playedResetTimer) {
+    clearInterval(playedResetTimer);
+    playedResetTimer = null;
+  }
+}
+
+async function checkPlayedReset(client: BublikClient): Promise<void> {
+  // Текущее время по МСК (UTC+3)
+  const now = new Date();
+  const mskHour = (now.getUTCHours() + 3) % 24;
+  const mskDate = new Date(now.getTime() + 3 * 60 * 60_000).toISOString().slice(0, 10);
+
+  for (const [, guild] of client.guilds.cache) {
+    const config = await getConfig(guild.id);
+    if (!config || !config.playedTodayRoleId) continue;
+
+    const resetHour = config.playedResetHour ?? 23;
+
+    // Сбросить один раз в день в указанный час
+    const resetKey = `${guild.id}:${mskDate}`;
+    if (mskHour === resetHour && !playedResetDone.has(resetKey)) {
+      playedResetDone.add(resetKey);
+
+      // Очистка старых ключей (старше 1 дня)
+      for (const key of playedResetDone) {
+        if (!key.endsWith(mskDate)) playedResetDone.delete(key);
+      }
+
+      const count = await resetAllPlayedTodayRoles(guild, config.pingRoleId, config.playedTodayRoleId);
+      if (count > 0) {
+        log.info(`Сброс «Играл сегодня» для ${guild.name}: ${count} участников`);
+      }
+
+      // Очистить трекинг сессий
+      clearVoiceSessions(guild.id);
     }
   }
 }

@@ -30,6 +30,8 @@ import {
   restoreSquads,
   startRoleIntegrityChecker,
   stopRoleIntegrityChecker,
+  startPlayedResetScheduler,
+  stopPlayedResetScheduler,
 } from './lifecycle';
 
 import { handleRegBattleInteraction } from './handlers';
@@ -75,11 +77,13 @@ const regbattleModule: BublikModule = {
       await restoreSquads(client);
       startPinger(client);
       startRoleIntegrityChecker(client);
+      startPlayedResetScheduler(client);
     } else {
       client.once('ready', async () => {
         await restoreSquads(client);
         startPinger(client);
         startRoleIntegrityChecker(client);
+        startPlayedResetScheduler(client);
       });
     }
     log.info('Модуль полковых боёв загружен ✓');
@@ -88,6 +92,7 @@ const regbattleModule: BublikModule = {
   async onUnload(client: BublikClient): Promise<void> {
     stopPinger();
     stopRoleIntegrityChecker();
+    stopPlayedResetScheduler();
     log.info('Модуль полковых боёв выгружен');
   },
 };

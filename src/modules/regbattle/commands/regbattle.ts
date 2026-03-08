@@ -99,6 +99,28 @@ const regbattleCommand: BublikCommand = {
             .setMinValue(1)
             .setMaxValue(20)
             .setRequired(false),
+        )
+        .addRoleOption((opt) =>
+          opt
+            .setName('played_role')
+            .setDescription('Роль «Играл сегодня» (не пингуется до сброса)')
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('played_min')
+            .setDescription('Мин. минут в ПБ-войсе для роли (по умолч. 15)')
+            .setMinValue(1)
+            .setMaxValue(240)
+            .setRequired(false),
+        )
+        .addIntegerOption((opt) =>
+          opt
+            .setName('played_reset')
+            .setDescription('Час сброса роли по МСК (0-23, по умолч. 23)')
+            .setMinValue(0)
+            .setMaxValue(23)
+            .setRequired(false),
         ),
     )
 
@@ -203,8 +225,11 @@ async function handleSetup(
   const reserve = interaction.options.getChannel('reserve');
   const pingRole = interaction.options.getRole('ping_role');
   const inSquadRole = interaction.options.getRole('insquad_role');
+  const playedRole = interaction.options.getRole('played_role');
   const squadSize = interaction.options.getInteger('squad_size');
   const airSize = interaction.options.getInteger('air_size');
+  const playedMin = interaction.options.getInteger('played_min');
+  const playedReset = interaction.options.getInteger('played_reset');
 
   // Первичная настройка — обязательные параметры
   if (!existing && (!master || !category || !announce || !pingRole || !inSquadRole)) {
@@ -225,8 +250,11 @@ async function handleSetup(
   if (reserve) data.reserveChannelId = reserve.id;
   if (pingRole) data.pingRoleId = pingRole.id;
   if (inSquadRole) data.inSquadRoleId = inSquadRole.id;
+  if (playedRole) data.playedTodayRoleId = playedRole.id;
   if (squadSize !== null) data.squadSize = squadSize;
   if (airSize !== null) data.airSize = airSize;
+  if (playedMin !== null) data.playedMinMinutes = playedMin;
+  if (playedReset !== null) data.playedResetHour = playedReset;
 
   const config = await upsertConfig(guildId, data);
   const isNew = !existing;
@@ -243,6 +271,9 @@ async function handleSetup(
       `> 🎖️ **В отряде:** ${config.inSquadRoleId ? `<@&${config.inSquadRoleId}>` : '*—*'}${changed('inSquadRoleId')}\n` +
       `> 👥 **Размер отряда:** ${config.squadSize}${changed('squadSize')}\n` +
       `> ✈️ **Авиация (макс.):** ${config.airSize}${changed('airSize')}\n` +
+      `> 🎮 **Играл сегодня:** ${config.playedTodayRoleId ? `<@&${config.playedTodayRoleId}>` : '*—*'}${changed('playedTodayRoleId')}\n` +
+      `> ⏱️ **Мин. минут для роли:** ${config.playedMinMinutes ?? 15}${changed('playedMinMinutes')}\n` +
+      `> 🔄 **Сброс роли (МСК):** ${config.playedResetHour ?? 23}:00${changed('playedResetHour')}\n` +
       (isNew ? `\nДалее:\n` +
         `• \`/regbattle addrole type:commander\` — роли полевых командиров\n` +
         `• \`/regbattle addrole type:mute\` — роли-исключения из мьюта\n` +
@@ -372,6 +403,9 @@ async function handleConfig(interaction: ChatInputCommandInteraction): Promise<v
       `> 🔇 **Немьютимые:** ${fmt(config.muteRoleIds, '@&')}\n` +
       `> 👥 **Размер отряда:** ${config.squadSize}\n` +
       `> ✈️ **Авиация (макс.):** ${config.airSize}\n` +
+      `> 🎮 **Играл сегодня:** ${config.playedTodayRoleId ? `<@&${config.playedTodayRoleId}>` : '*—*'}\n` +
+      `> ⏱️ **Мин. минут для роли:** ${config.playedMinMinutes ?? 15}\n` +
+      `> 🔄 **Сброс роли (МСК):** ${config.playedResetHour ?? 23}:00\n` +
       `> 📊 **Эскалация через:** ${config.pingEscalateAfter} пингов`,
     )],
     ephemeral: true,
