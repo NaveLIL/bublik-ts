@@ -151,3 +151,71 @@ model TempVoiceUserSettings {
   @@unique([userId, guildId])
   @@map("tempvoice_user_settings")
 }
+
+// ═══════════════════════════════════════════════
+//  Отпуска (Vacation)
+// ═══════════════════════════════════════════════
+
+// ── Конфигурация системы отпусков ─────────────
+model VacationConfig {
+  id              String   @id @default(cuid())
+  guildId         String   @unique
+
+  panelChannelId  String?                             // канал где размещена панель
+  panelMessageId  String?                             // ID сообщения панели
+
+  reviewChannelId String?                             // канал для заявок (ревью)
+  logChannelId    String?                             // канал для логов (одобрено/вернулся)
+
+  vacationRoleId  String?                             // роль, выдаваемая в отпуске
+  removeRoleIds   String[]  @default([])              // роли, снимаемые при уходе в отпуск
+  reviewerRoleIds String[]  @default([])              // роли, которые могут одобрять/отклонять
+  pingRoleIds     String[]  @default([])              // роли, пингуемые при новой заявке
+
+  maxDurationDays Int       @default(30)              // максимальная длительность в днях
+  quickDurationH  Int       @default(12)              // длительность «Не смогу сегодня» в часах
+
+  primeTimeStart  Int       @default(17)              // начало прайм-тайма (МСК, 0-23)
+  primeTimeEnd    Int       @default(1)               // конец прайм-тайма (МСК, 0-23)
+  primeTimeBuffer Int       @default(1)               // блокировка за N ч до прайм-тайма
+
+  imageUrl        String?                             // картинка для панели
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  requests        VacationRequest[]
+
+  @@map("vacation_configs")
+}
+
+// ── Заявка на отпуск ──────────────────────────
+model VacationRequest {
+  id              String    @id @default(cuid())
+  guildId         String
+  userId          String
+
+  type            String    @default("regular")       // regular | quick | admin
+  reason          String
+  durationMinutes Int                                 // запрашиваемая длительность
+
+  status          String    @default("pending")       // pending | active | denied | expired | completed
+  reviewerId      String?                             // кто одобрил/отклонил
+  reviewMessageId String?                             // ID сообщения в канале ревью
+
+  savedRoleIds    String[]  @default([])              // роли, снятые при уходе (для восстановления)
+
+  startDate       DateTime?                           // начало отпуска (после одобрения)
+  endDate         DateTime?                           // окончание отпуска
+  reminderSent    Boolean   @default(false)           // напоминание за 24ч отправлено?
+
+  configId        String
+  config          VacationConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([guildId, userId])
+  @@index([status])
+  @@map("vacation_requests")
+}

@@ -4,7 +4,7 @@
 //  Функционал:
 //  • Join-to-Create: зайди в генератор → получи личный канал
 //  • Панель управления в текстовом чате VC (3 страницы)
-//  • Уровни доступа: Owner, Moderator, Booster, Trusted, Normal, Blocked
+//  • Уровни доступа: Owner, Moderator, Reward, Booster, Trusted, Normal, Blocked
 //  • Lock / Hide / Rename / Limit / Bitrate / Region
 //  • Trust / Block / Kick / Transfer / Invite / Claim
 //  • Сохранение настроек пользователя
