@@ -36,17 +36,46 @@ function cid(...parts: string[]): string {
 // ═══════════════════════════════════════════════
 
 export function buildPanelEmbed(config: VacationConfig): BublikEmbed {
+  const blockStart = (config.primeTimeStart - config.primeTimeBuffer + 24) % 24;
+  const primeText = `${String(blockStart).padStart(2, '0')}:00 — ${String(config.primeTimeEnd).padStart(2, '0')}:00 МСК`;
+
+  const cooldownText = config.cooldownDays > 0
+    ? `${config.cooldownDays} дн.`
+    : 'отсутствует';
+  const monthLimitText = config.maxPerMonth > 0
+    ? `${config.maxPerMonth}`
+    : '∞';
+  const quickLimitText = config.maxQuickPerWeek > 0
+    ? `${config.maxQuickPerWeek}`
+    : '∞';
+
   const embed = new BublikEmbed()
     .setColor(COLOR_PANEL)
     .setTitle('🏖️ Система Управления Отпусками')
     .setDescription(
       'Здесь вы можете официально уведомить о своём временном ' +
       'отсутствии в клане или досрочно вернуться из него.\n\n' +
-      '⚠️ **Важно:** Все заявки на отпуск требуют одобрения от командования.',
+
+      '**📋 Как это работает:**\n' +
+      '> 1. Нажмите **«Уйти в отпуск»** и выберите причину\n' +
+      '> 2. Укажите длительность (например: `7d`, `2w`, `1m`)\n' +
+      '> 3. Заявка уйдёт на рассмотрение командованию\n' +
+      '> 4. После одобрения ваши роли временно снимаются\n' +
+      '> 5. По окончании роли восстанавливаются автоматически\n\n' +
+
+      '**⚡ Быстрый отпуск** — «Не смогу сегодня»\n' +
+      `> Моментальный отпуск на **${config.quickDurationH}ч** без одобрения.\n\n` +
+
+      '**🔒 Ограничения:**\n' +
+      `> ⏳ Макс. длительность: **${config.maxDurationDays} дн.**\n` +
+      `> 🕐 Заблокировано в прайм-тайм: **${primeText}**\n` +
+      `> 🔄 Кулдаун между отпусками: **${cooldownText}**\n` +
+      `> 📊 Макс. отпусков за 30 дн.: **${monthLimitText}**\n` +
+      `> ⚡ Макс. быстрых за 7 дн.: **${quickLimitText}**\n\n` +
+
+      '⏰ Нерассмотренные заявки автоматически отклоняются через **3 часа**.\n' +
+      '🔔 За **24 часа** до конца отпуска вы получите напоминание в ЛС.',
     )
-    .setFooter({
-      text: `Бублик | Система автоматизации • Макс. срок: ${config.maxDurationDays} дн.`,
-    })
     .setTimestamp();
 
   if (config.imageUrl) {
