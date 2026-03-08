@@ -268,6 +268,16 @@ async function handleDurationModal(
       await interaction.reply({ embeds: [vacError('Укажите причину отпуска.')], ephemeral: true });
       return;
     }
+    // Эскейпинг markdown для защиты от подделки сообщений (social engineering)
+    reason = reason
+      .replace(/\\/g, '\\\\')
+      .replace(/\*/g, '\\*')
+      .replace(/_/g, '\\_')
+      .replace(/~/g, '\\~')
+      .replace(/`/g, '\\`')
+      .replace(/\|/g, '\\|')
+      .replace(/>/g, '\\>')
+      .replace(/\[/g, '\\[');
   } else {
     reason = getReasonLabel(reasonValue);
   }
@@ -415,14 +425,17 @@ async function handleReturnButton(
   // Восстановить роли
   await restoreRoles(member, active.savedRoleIds, config.vacationRoleId);
 
-  // Обновить статус
-  await updateRequest(active.id, { status: VacationStatus.Completed });
+  // Обновить статус + зафиксировать реальную дату окончания (для корректного кулдауна)
+  const updated = await updateRequest(active.id, {
+    status: VacationStatus.Completed,
+    endDate: new Date(),
+  });
 
   // Лог
   if (config.logChannelId) {
     try {
       const logChannel = await client.channels.fetch(config.logChannelId) as TextChannel;
-      await logChannel.send({ embeds: [buildVacationEndLog(member, active, true)] });
+      await logChannel.send({ embeds: [buildVacationEndLog(member, updated, true)] });
     } catch { /* skip */ }
   }
 
@@ -525,6 +538,18 @@ async function handleQuickButton(
   }
 
   await interaction.deferReply({ ephemeral: true });
+
+  // Повторная проверка (от race conditions — два быстрых клика одновременно)
+  const activeRecheck = await getActiveVacation(guildId, userId);
+  if (activeRecheck) {
+    await interaction.editReply({ embeds: [vacWarn('Вы уже в отпуске.')] });
+    return;
+  }
+  const pendingRecheck = await getPendingRequest(guildId, userId);
+  if (pendingRecheck) {
+    await interaction.editReply({ embeds: [vacWarn('У вас уже есть ожидающая заявка.')] });
+    return;
+  }
 
   const member = interaction.member as GuildMember;
   const durationMinutes = config.quickDurationH * 60;

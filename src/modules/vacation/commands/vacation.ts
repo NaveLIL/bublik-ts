@@ -585,6 +585,20 @@ async function handleForce(
     return;
   }
 
+  // Жёсткий лимит даже для force (защита от опечаток типа 12m вместо 12min)
+  const MAX_FORCE_DAYS = 365;
+  if (durationMinutes > MAX_FORCE_DAYS * 24 * 60) {
+    await interaction.reply({
+      embeds: [errorEmbed(
+        `Максимальная длительность даже для принудительного отпуска — **${MAX_FORCE_DAYS} дней**.\n` +
+        `Вы указали: **${formatDuration(durationMinutes)}**.\n` +
+        `_(Если вы хотели минуты — используйте \`min\`: \`30min\`)_`,
+      )],
+      ephemeral: true,
+    });
+    return;
+  }
+
   // Проверить, не в отпуске ли уже
   const active = await getActiveVacation(guildId, targetUser.id);
   if (active) {
@@ -690,13 +704,17 @@ async function handleReturn(
     await restoreRoles(member, active.savedRoleIds, active.config.vacationRoleId);
   }
 
-  await updateRequest(active.id, { status: VacationStatus.Completed });
+  // Зафиксировать реальную дату окончания (для корректного кулдауна)
+  const updated = await updateRequest(active.id, {
+    status: VacationStatus.Completed,
+    endDate: new Date(),
+  });
 
   // Лог
   if (active.config.logChannelId && member) {
     try {
       const logChannel = await client.channels.fetch(active.config.logChannelId) as TextChannel;
-      await logChannel.send({ embeds: [buildVacationEndLog(member, active, true)] });
+      await logChannel.send({ embeds: [buildVacationEndLog(member, updated, true)] });
     } catch { /* skip */ }
   }
 
@@ -717,6 +735,18 @@ async function handlePrimeTime(
   const start = interaction.options.getInteger('start', true);
   const end = interaction.options.getInteger('end', true);
   const buffer = interaction.options.getInteger('buffer') ?? 1;
+
+  // Защита: start == end с buffer=0 блокирует отпуска 24/7
+  if (start === end) {
+    await interaction.reply({
+      embeds: [errorEmbed(
+        'Начало и конец прайм-тайма не могут совпадать.\n' +
+        'Это создало бы круглосуточную блокировку отпусков.',
+      )],
+      ephemeral: true,
+    });
+    return;
+  }
 
   await upsertConfig(interaction.guildId!, {
     primeTimeStart: start,
