@@ -62,26 +62,26 @@ const vacationCommand: BublikCommand = {
     .addSubcommand((sub) =>
       sub
         .setName('setup')
-        .setDescription('Настроить систему отпусков')
+        .setDescription('Настроить / изменить систему отпусков')
         .addChannelOption((opt) =>
           opt
             .setName('review')
             .setDescription('Канал для заявок на отпуск')
             .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true),
+            .setRequired(false),
         )
         .addChannelOption((opt) =>
           opt
             .setName('log')
             .setDescription('Канал для логов (уход/возврат)')
             .addChannelTypes(ChannelType.GuildText)
-            .setRequired(true),
+            .setRequired(false),
         )
         .addRoleOption((opt) =>
           opt
             .setName('role')
             .setDescription('Роль, выдаваемая в отпуске')
-            .setRequired(true),
+            .setRequired(false),
         )
         .addIntegerOption((opt) =>
           opt
@@ -308,33 +308,67 @@ async function handleSetup(
   interaction: ChatInputCommandInteraction,
   client: BublikClient,
 ): Promise<void> {
-  const reviewChannel = interaction.options.getChannel('review', true);
-  const logChannel = interaction.options.getChannel('log', true);
-  const role = interaction.options.getRole('role', true);
-  const maxDays = interaction.options.getInteger('max_days') ?? 30;
-  const quickHours = interaction.options.getInteger('quick_hours') ?? 12;
+  const guildId = interaction.guildId!;
+  const existing = await getConfig(guildId);
 
-  await upsertConfig(interaction.guildId!, {
-    reviewChannelId: reviewChannel.id,
-    logChannelId: logChannel.id,
-    vacationRoleId: role.id,
-    maxDurationDays: maxDays,
-    quickDurationH: quickHours,
-  });
+  const reviewChannel = interaction.options.getChannel('review');
+  const logChannel = interaction.options.getChannel('log');
+  const role = interaction.options.getRole('role');
+  const maxDays = interaction.options.getInteger('max_days');
+  const quickHours = interaction.options.getInteger('quick_hours');
+
+  // Первичная настройка — требуем обязательные параметры
+  if (!existing && (!reviewChannel || !logChannel || !role)) {
+    await interaction.reply({
+      embeds: [errorEmbed(
+        'Первичная настройка требует **все** параметры:\n' +
+        '`/vacation setup review:#канал log:#канал role:@роль`',
+      )],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Проверка: review канал не должен совпадать с panel каналом
+  const newReviewId = reviewChannel?.id ?? existing?.reviewChannelId;
+  if (newReviewId && existing?.panelChannelId && newReviewId === existing.panelChannelId) {
+    await interaction.reply({
+      embeds: [errorEmbed(
+        'Канал заявок (**review**) не может совпадать с каналом панели.\n' +
+        `Панель сейчас в <#${existing.panelChannelId}>. Укажите другой канал.`,
+      )],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Собираем только указанные параметры
+  const data: Record<string, any> = {};
+  if (reviewChannel) data.reviewChannelId = reviewChannel.id;
+  if (logChannel) data.logChannelId = logChannel.id;
+  if (role) data.vacationRoleId = role.id;
+  if (maxDays !== null) data.maxDurationDays = maxDays;
+  if (quickHours !== null) data.quickDurationH = quickHours;
+
+  const config = await upsertConfig(guildId, data);
+
+  // Формируем ответ с пометками что изменилось
+  const changed = (key: string) => data[key] !== undefined ? ' ✏️' : '';
+  const isNew = !existing;
 
   await interaction.reply({
     embeds: [successEmbed(
-      `🏖️ **Система отпусков настроена!**\n\n` +
-      `> 📋 **Канал заявок:** <#${reviewChannel.id}>\n` +
-      `> 📝 **Канал логов:** <#${logChannel.id}>\n` +
-      `> 🏖️ **Роль отпуска:** <@&${role.id}>\n` +
-      `> ⏳ **Макс. срок:** ${maxDays} дн.\n` +
-      `> ⚡ **Быстрый отпуск:** ${quickHours}ч\n\n` +
-      `Далее:\n` +
-      `• \`/vacation addrole type:remove\` — роли для снятия\n` +
-      `• \`/vacation addrole type:reviewer\` — проверяющие\n` +
-      `• \`/vacation addrole type:ping\` — роли для пинга\n` +
-      `• \`/vacation panel\` — развернуть панель`,
+      `🏖️ **Система отпусков ${isNew ? 'настроена' : 'обновлена'}!**\n\n` +
+      `> 📋 **Канал заявок:** <#${config.reviewChannelId}>${changed('reviewChannelId')}\n` +
+      `> 📝 **Канал логов:** <#${config.logChannelId}>${changed('logChannelId')}\n` +
+      `> 🏖️ **Роль отпуска:** <@&${config.vacationRoleId}>${changed('vacationRoleId')}\n` +
+      `> ⏳ **Макс. срок:** ${config.maxDurationDays} дн.${changed('maxDurationDays')}\n` +
+      `> ⚡ **Быстрый отпуск:** ${config.quickDurationH}ч${changed('quickDurationH')}\n` +
+      (isNew ? `\nДалее:\n` +
+        `• \`/vacation addrole type:remove\` — роли для снятия\n` +
+        `• \`/vacation addrole type:reviewer\` — проверяющие\n` +
+        `• \`/vacation addrole type:ping\` — роли для пинга\n` +
+        `• \`/vacation panel\` — развернуть панель` : ''),
     )],
     ephemeral: true,
   });
@@ -359,6 +393,18 @@ async function handlePanel(
   if (!config) {
     await interaction.reply({
       embeds: [errorEmbed('Сначала выполните `/vacation setup`.')],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Панель не должна быть в канале заявок
+  if (config.reviewChannelId && channel.id === config.reviewChannelId) {
+    await interaction.reply({
+      embeds: [errorEmbed(
+        'Панель нельзя размещать в канале заявок.\n' +
+        `Канал заявок: <#${config.reviewChannelId}>. Укажите другой канал.`,
+      )],
       ephemeral: true,
     });
     return;
