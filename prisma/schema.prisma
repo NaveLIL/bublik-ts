@@ -247,7 +247,7 @@ model RegBattleConfig {
   squadSize         Int      @default(8)                // целевой размер отряда
   airSize           Int      @default(4)                // макс. людей в авиа-канале
 
-  pingEscalateAfter Int     @default(3)                 // сколько пингов роли до эскалации к именным
+  pingEscalateAfter Int     @default(6)                 // сколько пингов роли до эскалации к именным
 
   playedTodayRoleId String?                             // роль «Играл сегодня» (не пингуется до сброса)
   playedMinMinutes  Int      @default(15)               // мин. минут в ПБ-войсе для получения роли

@@ -317,6 +317,13 @@ async function handleEscalated(
     const member = await guild.members.fetch(userId).catch(() => null);
     if (!member) return;
 
+    // Пропустить если получил playedTodayRole после формирования очереди
+    if (config.playedTodayRoleId && member.roles.cache.has(config.playedTodayRoleId)) return;
+
+    // Пропустить если уже в ПБ-войсе
+    const pbIds = await getAllPbChannelIds(guild.id);
+    if (member.voice.channelId && pbIds.includes(member.voice.channelId)) return;
+
     const channel = await guild.client.channels.fetch(config.announceChannelId) as TextChannel;
     if (!channel) return;
 

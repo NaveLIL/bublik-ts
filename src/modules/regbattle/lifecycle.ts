@@ -711,13 +711,38 @@ async function checkPlayedReset(client: BublikClient): Promise<void> {
         if (!key.endsWith(mskDate)) playedResetDone.delete(key);
       }
 
-      const count = await resetAllPlayedTodayRoles(guild, config.pingRoleId, config.playedTodayRoleId);
+      // Собрать ID участников, которые сейчас в ПБ-войсах (их не трогать)
+      const squads = await getGuildSquads(guild.id);
+      const pbMemberIds = new Set<string>();
+      for (const sq of squads) {
+        const mainVc = guild.channels.cache.get(sq.voiceChannelId);
+        if (mainVc && mainVc.type === ChannelType.GuildVoice) {
+          (mainVc as VoiceChannel).members.forEach((m) => {
+            if (!m.user.bot) pbMemberIds.add(m.id);
+          });
+        }
+        if (sq.airChannelId) {
+          const airVc = guild.channels.cache.get(sq.airChannelId);
+          if (airVc && airVc.type === ChannelType.GuildVoice) {
+            (airVc as VoiceChannel).members.forEach((m) => {
+              if (!m.user.bot) pbMemberIds.add(m.id);
+            });
+          }
+        }
+      }
+
+      const count = await resetAllPlayedTodayRoles(guild, config.pingRoleId, config.playedTodayRoleId, pbMemberIds);
       if (count > 0) {
         log.info(`Сброс «Играл сегодня» для ${guild.name}: ${count} участников`);
       }
 
-      // Очистить трекинг сессий
-      clearVoiceSessions(guild.id);
+      // Очистить трекинг сессий (кроме тех кто в ПБ)
+      const guildMap = voiceSessionMap.get(guild.id);
+      if (guildMap) {
+        for (const [memberId] of guildMap) {
+          if (!pbMemberIds.has(memberId)) guildMap.delete(memberId);
+        }
+      }
     }
   }
 }

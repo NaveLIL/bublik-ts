@@ -17,6 +17,7 @@ import {
   PermissionsBitField,
   VoiceChannel,
   TextChannel,
+  GuildMember,
 } from 'discord.js';
 import type { BublikClient } from '../../../bot';
 import { BublikCommand, CommandScope } from '../../../types/Command';
@@ -480,17 +481,23 @@ async function handleClose(
     try {
       // Восстановить роли всем участникам
       if (config) {
+        const restoreMember = async (member: GuildMember) => {
+          if (member.user.bot) return;
+          if (config.inSquadRoleId && member.roles.cache.has(config.inSquadRoleId)) {
+            await member.roles.remove(config.inSquadRoleId).catch(() => null);
+          }
+          if (config.playedTodayRoleId && member.roles.cache.has(config.playedTodayRoleId)) {
+            await member.roles.remove(config.playedTodayRoleId).catch(() => null);
+          }
+          if (config.pingRoleId && !member.roles.cache.has(config.pingRoleId)) {
+            await member.roles.add(config.pingRoleId).catch(() => null);
+          }
+        };
+
         const mainVc = guild.channels.cache.get(squad.voiceChannelId) as VoiceChannel | undefined;
         if (mainVc) {
           for (const [, member] of mainVc.members) {
-            if (!member.user.bot) {
-              if (config.inSquadRoleId && member.roles.cache.has(config.inSquadRoleId)) {
-                await member.roles.remove(config.inSquadRoleId).catch(() => null);
-              }
-              if (config.pingRoleId && !member.roles.cache.has(config.pingRoleId)) {
-                await member.roles.add(config.pingRoleId).catch(() => null);
-              }
-            }
+            await restoreMember(member);
           }
         }
         const airVc = squad.airChannelId
@@ -498,14 +505,7 @@ async function handleClose(
           : null;
         if (airVc) {
           for (const [, member] of airVc.members) {
-            if (!member.user.bot) {
-              if (config.inSquadRoleId && member.roles.cache.has(config.inSquadRoleId)) {
-                await member.roles.remove(config.inSquadRoleId).catch(() => null);
-              }
-              if (config.pingRoleId && !member.roles.cache.has(config.pingRoleId)) {
-                await member.roles.add(config.pingRoleId).catch(() => null);
-              }
-            }
+            await restoreMember(member);
           }
           await airVc.delete('ПБ: расформирование по команде').catch(() => null);
         }

@@ -244,12 +244,14 @@ export async function applyPlayedTodayRole(
 
 /**
  * Сбросить роль «Играл сегодня» у всех участников гильдии.
- * Убирает playedTodayRole, возвращает pingRole.
+ * Убирает playedTodayRole, возвращает pingRole (только если участник НЕ в ПБ-войсе).
+ * @param pbMemberIds — множество ID участников, находящихся сейчас в ПБ-войсах (они НЕ получают pingRole обратно)
  */
 export async function resetAllPlayedTodayRoles(
   guild: Guild,
   pingRoleId: string | null,
   playedTodayRoleId: string,
+  pbMemberIds?: Set<string>,
 ): Promise<number> {
   const ptRole = guild.roles.cache.get(playedTodayRoleId);
   if (!ptRole) return 0;
@@ -258,6 +260,9 @@ export async function resetAllPlayedTodayRoles(
   for (const [, member] of ptRole.members) {
     if (member.user.bot) continue;
 
+    // Если участник сейчас в ПБ-войсе — НЕ трогать (он активно играет)
+    if (pbMemberIds && pbMemberIds.has(member.id)) continue;
+
     try {
       await member.roles.remove(playedTodayRoleId, 'RegBattle: ежедневный сброс');
       log.info(`✔ Сброшена playedTodayRole у ${member.user.tag}`);
@@ -265,7 +270,7 @@ export async function resetAllPlayedTodayRoles(
       log.error(`✗ Не удалось снять playedTodayRole у ${member.user.tag}`, { error: String(err) });
     }
 
-    // Вернуть pingRole (если не в ПБ-войсе)
+    // Вернуть pingRole
     if (pingRoleId && !member.roles.cache.has(pingRoleId)) {
       const pingRole = guild.roles.cache.get(pingRoleId);
       if (pingRole && canManageRole(guild, pingRole)) {
@@ -304,9 +309,20 @@ export function releaseCreationLock(userId: string): void {
 export function isCreationCooldown(userId: string): boolean {
   const last = creationCooldowns.get(userId);
   if (!last) return false;
-  return Date.now() - last < 10_000;
+  if (Date.now() - last < 10_000) return true;
+  // Очистка устаревшего кулдауна
+  creationCooldowns.delete(userId);
+  return false;
 }
 
 export function setCreationCooldown(userId: string): void {
   creationCooldowns.set(userId, Date.now());
+
+  // Периодическая очистка: если больше 100 записей, удалить старые
+  if (creationCooldowns.size > 100) {
+    const now = Date.now();
+    for (const [uid, ts] of creationCooldowns) {
+      if (now - ts > 60_000) creationCooldowns.delete(uid);
+    }
+  }
 }
