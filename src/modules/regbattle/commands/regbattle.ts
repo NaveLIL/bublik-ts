@@ -122,6 +122,13 @@ const regbattleCommand: BublikCommand = {
             .setMinValue(0)
             .setMaxValue(23)
             .setRequired(false),
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName('reprimand_channel')
+            .setDescription('Канал для выговоров')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false),
         ),
     )
 
@@ -138,6 +145,8 @@ const regbattleCommand: BublikCommand = {
             .addChoices(
               { name: '🎖️ Полевой командир', value: 'commander' },
               { name: '🔇 Немьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
+              { name: '⚠️ Тип выговора', value: 'reprimand_type' },
+              { name: '🛡️ Право аннуляции выговоров', value: 'reprimand_annul' },
             ),
         )
         .addRoleOption((opt) =>
@@ -158,6 +167,8 @@ const regbattleCommand: BublikCommand = {
             .addChoices(
               { name: '🎖️ Полевой командир', value: 'commander' },
               { name: '🔇 Немьютимая (РАСПОРЯЖЕНИЯ)', value: 'mute' },
+              { name: '⚠️ Тип выговора', value: 'reprimand_type' },
+              { name: '🛡️ Право аннуляции выговоров', value: 'reprimand_annul' },
             ),
         )
         .addRoleOption((opt) =>
@@ -231,6 +242,7 @@ async function handleSetup(
   const airSize = interaction.options.getInteger('air_size');
   const playedMin = interaction.options.getInteger('played_min');
   const playedReset = interaction.options.getInteger('played_reset');
+  const reprimandChannel = interaction.options.getChannel('reprimand_channel');
 
   // Первичная настройка — обязательные параметры
   if (!existing && (!master || !category || !announce || !pingRole || !inSquadRole)) {
@@ -256,6 +268,7 @@ async function handleSetup(
   if (airSize !== null) data.airSize = airSize;
   if (playedMin !== null) data.playedMinMinutes = playedMin;
   if (playedReset !== null) data.playedResetHour = playedReset;
+  if (reprimandChannel) data.reprimandChannelId = reprimandChannel.id;
 
   const config = await upsertConfig(guildId, data);
   const isNew = !existing;
@@ -275,6 +288,7 @@ async function handleSetup(
       `> 🎮 **Играл сегодня:** ${config.playedTodayRoleId ? `<@&${config.playedTodayRoleId}>` : '*—*'}${changed('playedTodayRoleId')}\n` +
       `> ⏱️ **Мин. минут для роли:** ${config.playedMinMinutes ?? 15}${changed('playedMinMinutes')}\n` +
       `> 🔄 **Сброс роли (МСК):** ${config.playedResetHour ?? 23}:00${changed('playedResetHour')}\n` +
+      `> 📝 **Выговоры:** ${config.reprimandChannelId ? `<#${config.reprimandChannelId}>` : '*—*'}${changed('reprimandChannelId')}\n` +
       (isNew ? `\nДалее:\n` +
         `• \`/regbattle addrole type:commander\` — роли полевых командиров\n` +
         `• \`/regbattle addrole type:mute\` — роли-исключения из мьюта\n` +
@@ -304,8 +318,10 @@ async function handleAddRole(interaction: ChatInputCommandInteraction): Promise<
   const fieldMap: Record<string, string> = {
     commander: 'commanderRoleIds',
     mute: 'muteRoleIds',
+    reprimand_type: 'reprimandTypeRoleIds',
+    reprimand_annul: 'reprimandAnnulRoleIds',
   };
-  const field = fieldMap[type] as 'commanderRoleIds' | 'muteRoleIds';
+  const field = fieldMap[type] as 'commanderRoleIds' | 'muteRoleIds' | 'reprimandTypeRoleIds' | 'reprimandAnnulRoleIds';
   const current: string[] = config[field];
 
   if (current.includes(role.id)) {
@@ -319,6 +335,8 @@ async function handleAddRole(interaction: ChatInputCommandInteraction): Promise<
   const typeLabels: Record<string, string> = {
     commander: '🎖️ Полевые командиры',
     mute: '🔇 Немьютимые',
+    reprimand_type: '⚠️ Типы выговоров',
+    reprimand_annul: '🛡️ Право аннуляции',
   };
 
   const list = updated.map((id) => `<@&${id}>`).join(', ');
@@ -348,8 +366,10 @@ async function handleRemoveRole(interaction: ChatInputCommandInteraction): Promi
   const fieldMap: Record<string, string> = {
     commander: 'commanderRoleIds',
     mute: 'muteRoleIds',
+    reprimand_type: 'reprimandTypeRoleIds',
+    reprimand_annul: 'reprimandAnnulRoleIds',
   };
-  const field = fieldMap[type] as 'commanderRoleIds' | 'muteRoleIds';
+  const field = fieldMap[type] as 'commanderRoleIds' | 'muteRoleIds' | 'reprimandTypeRoleIds' | 'reprimandAnnulRoleIds';
   const current: string[] = config[field];
 
   if (!current.includes(role.id)) {
@@ -363,6 +383,8 @@ async function handleRemoveRole(interaction: ChatInputCommandInteraction): Promi
   const typeLabels: Record<string, string> = {
     commander: '🎖️ Полевые командиры',
     mute: '🔇 Немьютимые',
+    reprimand_type: '⚠️ Типы выговоров',
+    reprimand_annul: '🛡️ Право аннуляции',
   };
 
   const list = updated.length > 0 ? updated.map((id) => `<@&${id}>`).join(', ') : '*нет*';
@@ -407,7 +429,10 @@ async function handleConfig(interaction: ChatInputCommandInteraction): Promise<v
       `> 🎮 **Играл сегодня:** ${config.playedTodayRoleId ? `<@&${config.playedTodayRoleId}>` : '*—*'}\n` +
       `> ⏱️ **Мин. минут для роли:** ${config.playedMinMinutes ?? 15}\n` +
       `> 🔄 **Сброс роли (МСК):** ${config.playedResetHour ?? 23}:00\n` +
-      `> 📊 **Эскалация через:** ${config.pingEscalateAfter} пингов`,
+      `> 📊 **Эскалация через:** ${config.pingEscalateAfter} пингов\n` +
+      `> 📝 **Канал выговоров:** ${config.reprimandChannelId ? `<#${config.reprimandChannelId}>` : '*—*'}\n` +
+      `> ⚠️ **Типы выговоров:** ${fmt(config.reprimandTypeRoleIds, '@&')}\n` +
+      `> 🛡️ **Право аннуляции:** ${fmt(config.reprimandAnnulRoleIds, '@&')}`,
     )],
     ephemeral: true,
   });

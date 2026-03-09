@@ -2,7 +2,7 @@ services:
   # ── PostgreSQL ───────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: bublik-postgres
+    container_name: bublik-n-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bublik}
@@ -21,7 +21,7 @@ services:
   # ── Redis ────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: bublik-redis
+    container_name: bublik-n-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
     volumes:
@@ -39,7 +39,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bublik-bot
+    container_name: bublik-n-bot
+    image: bublik-n-bot
     restart: unless-stopped
     depends_on:
       postgres:

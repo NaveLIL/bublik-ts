@@ -22,14 +22,14 @@ const log = logger.child('Module:welcome');
 // ── Таймер напоминаний (хранится на уровне модуля) ──
 let reminderTimer: ReturnType<typeof setInterval> | null = null;
 
-const REMINDER_INTERVAL_MS = 60 * 60 * 1_000; // 1 час
-const MAX_REMINDERS_PER_CYCLE = 3;             // макс. пингов за цикл (рейт-лимит)
+const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1_000; // 24 часа
+const MAX_REMINDERS_PER_CYCLE = 3;                  // макс. пингов за цикл (рейт-лимит)
 const DELAY_BETWEEN_MS = 2_000;                // 2 с задержка между пингами
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ═══════════════════════════════════════════════
-//  Цикл напоминаний (раз в час)
+//  Цикл напоминаний (раз в 24 часа)
 // ═══════════════════════════════════════════════
 
 /**

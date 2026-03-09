@@ -8,6 +8,7 @@ import {
   ButtonStyle,
   GuildMember,
   StringSelectMenuBuilder,
+  UserSelectMenuBuilder,
 } from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
 import { RB_PREFIX, RB_SEP } from './constants';
@@ -33,12 +34,16 @@ export function buildControlPanelEmbed(
       `Командир отдаёт приказы, все слушают.\n\n` +
       `👢 **КИК** — выбор участника для отключения\n` +
       `из голосового канала отряда.\n\n` +
+      `🔇 **МЬЮТ** — выбор участника для\n` +
+      `мьюта/размьюта микрофона.\n\n` +
       `📩 **ПИНГ В ЛС** — рассылка в личные сообщения\n` +
       `всем доступным бойцам (кулдаун 5 мин).\n\n` +
       `✈️ **АВИАЦИЯ** — создать авиа-канал (до 4 чел.),\n` +
       `привязанный к этому отряду.\n\n` +
       `🔄 **ПЕРЕДАТЬ ПРАВА** — передать управление\n` +
       `отрядом другому бойцу.\n\n` +
+      `⚠️ **ВЫГОВОР** — официальное дисциплинарное\n` +
+      `взыскание с выбором типа и причины.\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
     )
     .setColor(0x2b5e2b);
@@ -56,6 +61,10 @@ export function buildControlPanelButtons(
     new ButtonBuilder()
       .setCustomId(`${RB_PREFIX}${RB_SEP}kick${RB_SEP}${squadId}`)
       .setLabel('👢 КИК')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`${RB_PREFIX}${RB_SEP}mutetoggle${RB_SEP}${squadId}`)
+      .setLabel('🔇 МЬЮТ')
       .setStyle(ButtonStyle.Secondary),
   );
 
@@ -78,7 +87,14 @@ export function buildControlPanelButtons(
       .setStyle(ButtonStyle.Secondary),
   );
 
-  return [row1, row2, row3];
+  const row4 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${RB_PREFIX}${RB_SEP}reprimand${RB_SEP}${squadId}`)
+      .setLabel('⚠️ ВЫГОВОР')
+      .setStyle(ButtonStyle.Danger),
+  );
+
+  return [row1, row2, row3, row4];
 }
 
 // ═══════════════════════════════════════════════
@@ -117,6 +133,68 @@ export function buildTransferSelect(
       members.map((m) => ({
         label: m.displayName.slice(0, 100),
         value: m.id,
+      })),
+    );
+
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+}
+
+/**
+ * Селектор мьюта — показывает участников с текущим статусом мьюта.
+ * Выбор тогглит состояние.
+ */
+export function buildMuteToggleSelect(
+  squadId: string,
+  members: { id: string; displayName: string; muted: boolean }[],
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${RB_PREFIX}${RB_SEP}sel${RB_SEP}mutetoggle${RB_SEP}${squadId}`)
+    .setPlaceholder('Выберите бойца для мьюта/размьюта')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      members.map((m) => ({
+        label: `${m.muted ? '🔇' : '🔊'} ${m.displayName}`.slice(0, 100),
+        description: m.muted ? 'Сейчас замьючен — нажмите для размьюта' : 'Не замьючен — нажмите для мьюта',
+        value: m.id,
+      })),
+    );
+
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);
+}
+
+/**
+ * UserSelect для выбора нарушителя (выговор)
+ */
+export function buildReprimandUserSelect(
+  squadId: string,
+): ActionRowBuilder<UserSelectMenuBuilder> {
+  const select = new UserSelectMenuBuilder()
+    .setCustomId(`${RB_PREFIX}${RB_SEP}sel${RB_SEP}rep_user${RB_SEP}${squadId}`)
+    .setPlaceholder('Выберите нарушителя')
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  return new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(select);
+}
+
+/**
+ * Селектор типа выговора (роли)
+ */
+export function buildReprimandTypeSelect(
+  squadId: string,
+  offenderId: string,
+  types: { roleId: string; roleName: string }[],
+): ActionRowBuilder<StringSelectMenuBuilder> {
+  const select = new StringSelectMenuBuilder()
+    .setCustomId(`${RB_PREFIX}${RB_SEP}sel${RB_SEP}rep_type${RB_SEP}${squadId}${RB_SEP}${offenderId}`)
+    .setPlaceholder('Выберите тип выговора')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+      types.map((t) => ({
+        label: t.roleName.slice(0, 100),
+        value: t.roleId,
       })),
     );
 

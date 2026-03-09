@@ -66,7 +66,7 @@ export async function clearState(userId: string): Promise<void> {
 }
 
 // ── Redis: пометка «напомнили» (антиспам) ────────
-const REMINDED_TTL = 3600; // не чаще 1 раза в час
+const REMINDED_TTL = 86_400; // не чаще 1 раза в 24 часа
 
 export async function markReminded(userId: string): Promise<void> {
   await cacheSet(`welcome:reminded:${userId}`, true, REMINDED_TTL);

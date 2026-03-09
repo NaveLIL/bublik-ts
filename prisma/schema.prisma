@@ -244,6 +244,10 @@ model RegBattleConfig {
   commanderRoleIds  String[] @default([])               // роли полевых командиров (доступ к генератору)
   muteRoleIds       String[] @default([])               // роли, мьютящиеся по кнопке «Распоряжения»
 
+  reprimandChannelId String?                            // канал для выговоров
+  reprimandAnnulRoleIds String[] @default([])           // роли, которые могут аннулировать выговоры
+  reprimandTypeRoleIds  String[] @default([])           // роли-типы выговоров (для выбора)
+
   squadSize         Int      @default(8)                // целевой размер отряда
   airSize           Int      @default(4)                // макс. людей в авиа-канале
 
@@ -280,4 +284,33 @@ model RegBattleSquad {
 
   @@index([guildId])
   @@map("regbattle_squads")
+}
+
+// ── Выговор (дисциплинарная система ПБ) ───────
+model Reprimand {
+  id              String   @id @default(cuid())
+  guildId         String
+
+  offenderId      String                                // ID нарушителя
+  issuerId        String                                // ID выдавшего выговор
+  typeRoleId      String                                // роль-тип выговора
+  reason          String                                // причина
+
+  status          String   @default("active")           // active | appealing | annulled
+  messageId       String?                               // ID сообщения в канале выговоров
+  channelId       String?                               // ID канала выговоров (на момент создания)
+
+  appealCategoryId String?                              // категория апелляции
+  appealTextId    String?                               // текстовый канал апелляции
+  appealVoiceId   String?                               // голосовой канал апелляции
+
+  annulledById    String?                               // кто аннулировал
+  annulledAt      DateTime?                             // когда аннулировано
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([guildId])
+  @@index([offenderId])
+  @@map("reprimands")
 }

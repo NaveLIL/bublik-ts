@@ -147,3 +147,27 @@ export async function getAllPbChannelIds(guildId: string): Promise<string[]> {
   }
   return ids;
 }
+
+// ═══════════════════════════════════════════════
+//  Reprimand — CRUD (выговоры)
+// ═══════════════════════════════════════════════
+
+export async function createReprimand(data: {
+  guildId: string;
+  offenderId: string;
+  issuerId: string;
+  typeRoleId: string;
+  reason: string;
+  messageId?: string;
+  channelId?: string;
+}) {
+  return getDatabase().reprimand.create({ data });
+}
+
+export async function getReprimand(id: string) {
+  return getDatabase().reprimand.findUnique({ where: { id } });
+}
+
+export async function updateReprimand(id: string, data: Record<string, any>) {
+  return getDatabase().reprimand.update({ where: { id }, data });
+}

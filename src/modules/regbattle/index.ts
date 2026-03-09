@@ -20,6 +20,8 @@ import {
   Interaction,
   ButtonInteraction,
   StringSelectMenuInteraction,
+  UserSelectMenuInteraction,
+  ModalSubmitInteraction,
 } from 'discord.js';
 import type { BublikClient } from '../../bot';
 import { BublikModule } from '../../types';
@@ -61,9 +63,10 @@ const regbattleModule: BublikModule = {
     {
       event: 'interactionCreate',
       async execute(interaction: Interaction) {
-        // Кнопки и селекты с префиксом rb:
+        // Кнопки, селекты, юзер-селекты и модальные окна с префиксом rb:
         if (
-          (interaction.isButton() || interaction.isStringSelectMenu()) &&
+          (interaction.isButton() || interaction.isStringSelectMenu() ||
+           interaction.isUserSelectMenu() || interaction.isModalSubmit()) &&
           interaction.customId.startsWith(RB_PREFIX + ':')
         ) {
           await handleRegBattleInteraction(interaction, interaction.client as BublikClient);
