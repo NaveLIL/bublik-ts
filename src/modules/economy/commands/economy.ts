@@ -20,6 +20,7 @@ import { logger } from '../../../core/Logger';
 import { getDatabase } from '../../../core/Database';
 import { upsertEcoConfig, getEcoConfig, deleteEcoConfig, invalidateProfileCache } from '../database';
 import { buildSetupEmbed, ecoError, ecoSuccess } from '../embeds';
+import { PB_TIERS } from '../constants';
 
 const log = logger.child('Economy:Command');
 
@@ -75,6 +76,18 @@ const economyCommand: BublikCommand = {
             .setDescription('Пользователь для сброса')
             .setRequired(true),
         ),
+    )
+
+    // ── roles ─────────────────────
+    .addSubcommand((sub) =>
+      sub
+        .setName('roles')
+        .setDescription('Настроить PB-роли (до 10 тиров, от низшего к высшему)')
+        .addRoleOption((o) => o.setName('tier1').setDescription('Тир 1: Шалом, полковые! (50ч, x1.0)').setRequired(false))
+        .addRoleOption((o) => o.setName('tier2').setDescription('Тир 2: Кошерный Воин (100ч, x1.1)').setRequired(false))
+        .addRoleOption((o) => o.setName('tier3').setDescription('Тир 3: Моше Даян Войса (200ч, x1.2)').setRequired(false))
+        .addRoleOption((o) => o.setName('tier4').setDescription('Тир 4: Маца и Меркава (400ч, x1.3)').setRequired(false))
+        .addRoleOption((o) => o.setName('tier5').setDescription('Тир 5: Шаббатний Ветеран (600ч, x1.4)').setRequired(false)),
     ),
 
   scope: CommandScope.Guild,
@@ -97,6 +110,9 @@ const economyCommand: BublikCommand = {
         break;
       case 'reset':
         await handleReset(interaction, guildId);
+        break;
+      case 'roles':
+        await handleRoles(interaction, guildId);
         break;
       default:
         await interaction.reply({ embeds: [ecoError('Неизвестная субкоманда.')], ephemeral: true });
@@ -234,6 +250,72 @@ async function handleReset(
       ephemeral: true,
     });
   }
+}
+
+// ── roles ───────────────────────────────────────
+
+async function handleRoles(
+  interaction: ChatInputCommandInteraction,
+  guildId: string,
+): Promise<void> {
+  // Собираем роли из опций (tier1..tier5)
+  // Discord ограничивает 25 опций на субкоманду, поэтому тиры 6-10 можно добавить вторым вызовом
+  const config = await getEcoConfig(guildId);
+  const existing: string[] = config?.pbRoleIds ?? [];
+
+  const roleIds: string[] = [...existing];
+  // Заполняем до 10 элементов
+  while (roleIds.length < 10) roleIds.push('');
+
+  let updated = false;
+  for (let i = 0; i < 5; i++) {
+    const role = interaction.options.getRole(`tier${i + 1}`);
+    if (role) {
+      roleIds[i] = role.id;
+      updated = true;
+    }
+  }
+
+  if (!updated) {
+    // Показываем текущие настройки
+    const lines = PB_TIERS.map((t, i) => {
+      const rId = existing[i];
+      const roleStr = rId ? `<@&${rId}>` : '*не задана*';
+      return `**${i + 1}.** ${t.name} (${t.hours}ч, x${t.multiplier}, банк: ${t.bankLimit === Infinity ? '∞' : t.bankLimit.toLocaleString('ru-RU')}) — ${roleStr}`;
+    });
+
+    await interaction.reply({
+      embeds: [
+        ecoSuccess(
+          `**PB-роли экономики:**\n\n${lines.join('\n')}\n\n` +
+          `Укажите роли в опциях tier1-tier5 для настройки.`,
+        ),
+      ],
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // Сохраняем обновлённый массив (убираем trailing empty)
+  const trimmed = roleIds.slice();
+  while (trimmed.length > 0 && !trimmed[trimmed.length - 1]) trimmed.pop();
+
+  await upsertEcoConfig(guildId, { pbRoleIds: trimmed });
+
+  const lines = PB_TIERS.slice(0, Math.max(trimmed.length, 5)).map((t, i) => {
+    const rId = trimmed[i];
+    const roleStr = rId ? `<@&${rId}>` : '*не задана*';
+    return `**${i + 1}.** ${t.name} — ${roleStr}`;
+  });
+
+  await interaction.reply({
+    embeds: [
+      ecoSuccess(`**PB-роли обновлены!**\n\n${lines.join('\n')}`),
+    ],
+    ephemeral: true,
+  });
+
+  log.info(`[${guildId}] PB-роли обновлены: [${trimmed.join(', ')}]`);
 }
 
 export default economyCommand;

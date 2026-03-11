@@ -12,7 +12,7 @@ import {
 import type { BublikClient } from '../../../bot';
 import { BublikCommand, CommandScope } from '../../../types/Command';
 import { logger } from '../../../core/Logger';
-import { getOrCreateProfile, getEcoConfig } from '../database';
+import { getOrCreateProfile, getEcoConfig, getPbRoleIds } from '../database';
 import {
   getPbTier,
   depositToBank,
@@ -71,8 +71,10 @@ const balanceCommand: BublikCommand = {
 
     const profile = await getOrCreateProfile(guildId, targetUser.id);
 
-    // PB-тир (нужен массив ролей — пока пустой, пока не добавим pbRoleIds в config)
-    const { multiplier, bankLimit, tierName } = getPbTier(member, []);
+    const pbRoleIds = await getPbRoleIds(guildId);
+
+    // PB-тир
+    const { multiplier, bankLimit, tierName } = getPbTier(member, pbRoleIds);
 
     await interaction.reply({
       embeds: [
@@ -125,7 +127,7 @@ const depositCommand: BublikCommand = {
       if (amount === 0) amount = profile.wallet;
       if (amount <= 0) return null;
 
-      const { bankLimit } = getPbTier(member, []);
+      const { bankLimit } = getPbTier(member, await getPbRoleIds(guildId));
       return depositToBank(guildId, userId, amount, bankLimit);
     });
 

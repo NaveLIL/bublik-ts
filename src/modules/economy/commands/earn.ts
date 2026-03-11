@@ -14,7 +14,7 @@ import {
 import type { BublikClient } from '../../../bot';
 import { BublikCommand, CommandScope } from '../../../types/Command';
 import { logger } from '../../../core/Logger';
-import { getEcoConfig } from '../database';
+import { getEcoConfig, getPbRoleIds } from '../database';
 import {
   claimDaily,
   claimWeekly,
@@ -72,7 +72,7 @@ const dailyCommand: BublikCommand = {
     if (!(await checkEnabled(interaction, guildId))) return;
 
     const member = interaction.member as GuildMember;
-    const result = await claimDaily(guildId, member, []);
+    const result = await claimDaily(guildId, member, await getPbRoleIds(guildId));
 
     if (!result.success) {
       if (result.error === 'cooldown') {
@@ -130,7 +130,7 @@ const weeklyCommand: BublikCommand = {
     // TODO: В будущем — проверять историю ролей через transactions
     const playedThisWeek = false; // Placeholder — будет определяться по-нормальному
 
-    const result = await claimWeekly(guildId, member, [], playedThisWeek);
+    const result = await claimWeekly(guildId, member, await getPbRoleIds(guildId), playedThisWeek);
 
     if (!result.success) {
       if (result.error === 'cooldown') {
@@ -169,7 +169,7 @@ const workCommand: BublikCommand = {
     if (!(await checkEnabled(interaction, guildId))) return;
 
     const member = interaction.member as GuildMember;
-    const result = await doWork(guildId, member, []);
+    const result = await doWork(guildId, member, await getPbRoleIds(guildId));
 
     if (!result.success) {
       if (result.error === 'cooldown') {
@@ -208,7 +208,7 @@ const crimeCommand: BublikCommand = {
     if (!(await checkEnabled(interaction, guildId))) return;
 
     const member = interaction.member as GuildMember;
-    const result = await doCrime(guildId, member, []);
+    const result = await doCrime(guildId, member, await getPbRoleIds(guildId));
 
     if (!result.success) {
       if (result.error === 'cooldown') {
@@ -251,7 +251,7 @@ const begCommand: BublikCommand = {
     if (!(await checkEnabled(interaction, guildId))) return;
 
     const member = interaction.member as GuildMember;
-    const result = await doBeg(guildId, member, []);
+    const result = await doBeg(guildId, member, await getPbRoleIds(guildId));
 
     if (!result.success) {
       if (result.error === 'cooldown') {

@@ -76,7 +76,32 @@ export const COOLDOWNS = {
   work:   14_400_000,       // 4ч
   crime:  28_800_000,       // 8ч
   beg:    30_000,           // 30с
-  rob:    14_400_000,       // 4ч (фаза 4)
+  rob:    14_400_000,       // 4ч (фаза 2)
+} as const;
+
+// ── Казино дефолты ──────────────────────
+
+export const CASINO_DEFAULTS = {
+  minBet: 50,
+  maxBet: 50_000,
+  slotsJackpotMultiplier: 10,
+  slotsTripleMultiplier: 5,
+  slotsDoubleMultiplier: 2,
+  coinflipMultiplier: 1.9,     // возврат x1.9 (хаус-эдж 5%)
+  diceMultiplier: 2.5,         // угадал точное число
+  diceRangeMultiplier: 1.5,    // угадал higher/lower
+  blackjackMultiplier: 2.0,    // обычный выигрыш
+  blackjackBjMultiplier: 2.5,  // блэкджек (21 с 2 карт)
+} as const;
+
+// ── Ограбления дефолты ───────────────────
+
+export const ROB_DEFAULTS = {
+  successRate: 45,
+  minSteal: 100,
+  maxPercent: 30,
+  fine: 500,
+  minVictimWallet: 500,        // мин. в кошельке жертвы
 } as const;
 
 // ── PB роли → множитель / лимит банка ────────
@@ -147,6 +172,14 @@ export const TX = {
   // Ограбления
   ROB_SUCCESS:  'rob_success',
   ROB_VICTIM:   'rob_victim',
+
+  // Казино
+  CASINO_WIN:   'casino_win',
+  CASINO_LOSE:  'casino_lose',
+  CASINO_BJ:    'casino_bj',
+
+  // Магазин
+  SHOP_BUY:     'shop_buy',
 } as const;
 
 // ── Emoji для embed-ов ───────────────────────
@@ -174,6 +207,13 @@ export const EMOJI = {
   SUCCESS:    '✅',
   CLOCK:      '⏰',
   ARROW_RIGHT:'▸',
+  DICE:       '🎲',
+  SLOTS:      '🎰',
+  COIN:       '🪙',
+  CARDS:      '🃏',
+  ROB:        '🕵️',
+  SHOP:       '🛍️',
+  CART:       '🛒',
 } as const;
 
 // ── Новостные пороги ─────────────────────────

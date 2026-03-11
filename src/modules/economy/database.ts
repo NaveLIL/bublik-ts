@@ -14,6 +14,12 @@ import { REDIS_ECO_CONFIG, REDIS_ECO_PROFILE, CONFIG_CACHE_TTL, PROFILE_CACHE_TT
 //  EconomyConfig
 // ═══════════════════════════════════════════════
 
+/** Получить pbRoleIds из кэшированного конфига (утилита) */
+export async function getPbRoleIds(guildId: string): Promise<string[]> {
+  const config = await getEcoConfig(guildId);
+  return config?.pbRoleIds ?? [];
+}
+
 /** Получить конфиг экономики гильдии (с кэшем) */
 export async function getEcoConfig(guildId: string) {
   const r = getRedis();
@@ -180,6 +186,7 @@ function serializeConfig(config: any) {
     workCooldown: Number(config.workCooldown),
     crimeCooldown: Number(config.crimeCooldown),
     begCooldown: Number(config.begCooldown),
+    robCooldown: Number(config.robCooldown),
   };
 }
 

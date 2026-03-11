@@ -360,8 +360,29 @@ model EconomyConfig {
   transferTax     Int      @default(5)                  // налог на переводы (%)
   bankWithdrawTax Int      @default(2)                  // комиссия за снятие из банка (%)
 
+  // PB-роли (индекс = тир в PB_TIERS)
+  pbRoleIds       String[] @default([])                 // ID ролей PB (от низшей к высшей, 10 макс.)
+
+  // Казино
+  casinoEnabled   Boolean  @default(true)               // казино включено?
+  casinoMinBet    Int      @default(50)                 // мин. ставка
+  casinoMaxBet    Int      @default(50000)              // макс. ставка
+
+  // Ограбления
+  robEnabled      Boolean  @default(true)               // /rob включён?
+  robCooldown     BigInt   @default(14400000)            // кулдаун (4ч)
+  robSuccessRate  Int      @default(45)                 // шанс успешного ограбления (%)
+  robMinSteal     Int      @default(100)                // мин. украсть
+  robMaxPercent   Int      @default(30)                 // макс. % кошелька жертвы
+  robFine         Int      @default(500)                // штраф при провале
+
+  // Магазин
+  shopEnabled     Boolean  @default(true)               // магазин включён?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  shopItems       ShopItem[]
 
   @@map("economy_configs")
 }
@@ -420,4 +441,50 @@ model EconomyTransaction {
   @@index([guildId, userId])
   @@index([createdAt])
   @@map("economy_transactions")
+}
+
+// ── Магазин — товар (роль) ────────────────────
+model ShopItem {
+  id              String   @id @default(cuid())
+  guildId         String
+
+  roleId          String                                // Discord роль
+  name            String                                // название товара
+  description     String?                               // описание
+  price           Int                                   // цена (₪)
+  durationHours   Int      @default(0)                  // 0 = навсегда, >0 = временная
+  maxStock        Int      @default(-1)                 // -1 = безлимит, >0 = ограниченный запас
+  currentStock    Int      @default(-1)                 // текущий остаток
+  isActive        Boolean  @default(true)               // в продаже?
+
+  configId        String
+  config          EconomyConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  purchases       ShopPurchase[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([guildId, roleId])                            // одна роль — один товар
+  @@index([guildId])
+  @@map("shop_items")
+}
+
+// ── Покупка в магазине ────────────────────────
+model ShopPurchase {
+  id          String   @id @default(cuid())
+  guildId     String
+  userId      String
+
+  itemId      String
+  item        ShopItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  price       Int                                       // цена на момент покупки
+  expiresAt   DateTime?                                 // null = навсегда
+
+  createdAt   DateTime @default(now())
+
+  @@index([guildId, userId])
+  @@index([expiresAt])
+  @@map("shop_purchases")
 }
