@@ -393,6 +393,8 @@ async function handleRemove(
     return;
   }
 
+  // Удаляем связанные покупки перед удалением товара (FK constraint)
+  await db.shopPurchase.deleteMany({ where: { itemId: item.id } });
   await db.shopItem.delete({ where: { id: item.id } });
 
   await interaction.reply({

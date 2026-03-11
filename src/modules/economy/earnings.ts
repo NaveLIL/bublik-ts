@@ -406,16 +406,41 @@ export async function doCrime(
       } as EarnResult;
     } else {
       // Провал — штраф (не ниже 0)
-      const actualFine = Math.min(fine, profile.wallet);
       const scenario = CRIME_FAIL_SCENARIOS[Math.floor(Math.random() * CRIME_FAIL_SCENARIOS.length)];
 
-      const updated = await db.economyProfile.update({
-        where: { guildId_userId: { guildId, userId } },
-        data: {
-          wallet: { decrement: actualFine },
-          lastCrime: new Date(),
-          totalSpent: { increment: BigInt(actualFine) },
-        },
+      // $transaction с fresh read для защиты от race condition (concurrent rob)
+      const { updated, actualFine } = await db.$transaction(async (tx) => {
+        const fresh = await tx.economyProfile.findUnique({
+          where: { guildId_userId: { guildId, userId } },
+        });
+        if (!fresh) throw new Error('no_profile');
+
+        const f = Math.min(fine, Math.max(0, fresh.wallet));
+
+        const result = await tx.economyProfile.update({
+          where: { guildId_userId: { guildId, userId } },
+          data: {
+            wallet: { decrement: f },
+            lastCrime: new Date(),
+            totalSpent: f > 0 ? { increment: BigInt(f) } : undefined,
+          },
+        });
+
+        // Защита: если concurrent rob вызвал negative wallet — корректируем
+        if (result.wallet < 0) {
+          const overflow = Math.abs(result.wallet);
+          const correctedFine = Math.max(0, f - overflow);
+          await tx.economyProfile.update({
+            where: { guildId_userId: { guildId, userId } },
+            data: {
+              wallet: 0,
+              totalSpent: overflow > 0 ? { decrement: BigInt(overflow) } : undefined,
+            },
+          });
+          return { updated: { ...result, wallet: 0 }, actualFine: correctedFine };
+        }
+
+        return { updated: result, actualFine: f };
       });
 
       await createTransaction({

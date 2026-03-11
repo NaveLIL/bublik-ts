@@ -128,8 +128,9 @@ const blackjackCommand: BublikCommand = {
     const deductResult = await withFinancialLock(guildId, userId, async () => {
       const profile = await getOrCreateProfile(guildId, userId);
       if (profile.wallet < bet) return { error: 'no_money' as const };
-      await addToWallet(guildId, userId, -bet, TX.CASINO_LOSE, 'BJ: ставка');
-      return { wallet: profile.wallet - bet };
+      const walletResult = await addToWallet(guildId, userId, -bet, TX.CASINO_LOSE, 'BJ: ставка');
+      if (!walletResult.success) return { error: 'no_money' as const };
+      return { wallet: walletResult.wallet };
     });
 
     if (deductResult === null) {
@@ -183,7 +184,8 @@ const blackjackCommand: BublikCommand = {
           const doubleResult = await withFinancialLock(guildId, userId, async () => {
             const p = await getOrCreateProfile(guildId, userId);
             if (p.wallet < bet) return null;
-            await addToWallet(guildId, userId, -bet, TX.CASINO_LOSE, 'BJ: double');
+            const walletResult = await addToWallet(guildId, userId, -bet, TX.CASINO_LOSE, 'BJ: double');
+            if (!walletResult.success) return null;
             return true;
           });
 

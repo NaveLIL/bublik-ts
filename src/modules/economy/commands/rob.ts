@@ -125,6 +125,9 @@ const robCommand: BublikCommand = {
               },
             });
 
+            // Защита от race condition: если кошелёк жертвы ушёл в минус — откат
+            if (updatedVictim.wallet < 0) throw new Error('insufficient');
+
             await tx.economyTransaction.create({
               data: {
                 guildId, userId: robberId, type: TX.ROB_SUCCESS,
