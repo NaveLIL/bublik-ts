@@ -22,6 +22,24 @@ import { CASINO_DEFAULTS, EMOJI, TX } from '../constants';
 
 const log = logger.child('Economy:Dice');
 
+/**
+ * Динамический множитель для range-режимов на основе вероятности.
+ * higher N: prob = (7-N)/6, payout = 0.95 / prob (5% house edge)
+ * lower  N: prob = N/6,     payout = 0.95 / prob
+ *
+ * Результаты:
+ *   higher 2 / lower 5: x1.1   (prob 83%)
+ *   higher 3 / lower 4: x1.4   (prob 67%)
+ *   higher 4 / lower 3: x1.9   (prob 50%)
+ *   higher 5 / lower 2: x2.9   (prob 33%)
+ *   higher 6 / lower 1: x5.7   (prob 17%)
+ */
+function getDiceRangeMultiplier(mode: 'higher' | 'lower', guess: number): number {
+  const prob = mode === 'higher' ? (7 - guess) / 6 : guess / 6;
+  if (prob <= 0 || prob >= 1) return 0; // safety — trivial picks blocked earlier
+  return Math.round((0.95 / prob) * 10) / 10;
+}
+
 const diceCommand: BublikCommand = {
   data: new SlashCommandBuilder()
     .setName('dice')
@@ -85,6 +103,22 @@ const diceCommand: BublikCommand = {
       return;
     }
 
+    // Блокируем тривиальные ставки (100% шанс выигрыша)
+    if (mode === 'higher' && guess <= 1) {
+      await interaction.reply({
+        embeds: [ecoError('В режиме «Больше или равно» число должно быть от 2 до 6.')],
+        ephemeral: true,
+      });
+      return;
+    }
+    if (mode === 'lower' && guess >= 6) {
+      await interaction.reply({
+        embeds: [ecoError('В режиме «Меньше или равно» число должно быть от 1 до 5.')],
+        ephemeral: true,
+      });
+      return;
+    }
+
     const result = await withFinancialLock(guildId, userId, async () => {
       const profile = await getOrCreateProfile(guildId, userId);
       if (profile.wallet < bet) return { error: 'no_money' as const };
@@ -98,7 +132,9 @@ const diceCommand: BublikCommand = {
         case 'lower':  won = roll <= guess; break;
       }
 
-      const multi = mode === 'exact' ? CASINO_DEFAULTS.diceMultiplier : CASINO_DEFAULTS.diceRangeMultiplier;
+      const multi = mode === 'exact'
+        ? CASINO_DEFAULTS.diceMultiplier
+        : getDiceRangeMultiplier(mode, guess);
 
       if (won) {
         const winAmount = Math.floor(bet * multi);

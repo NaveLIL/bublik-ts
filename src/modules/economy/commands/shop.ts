@@ -275,6 +275,13 @@ async function handleBuy(
     log.error(`Не удалось выдать роль ${item.roleId} для ${userId}`, err);
     // Возвращаем деньги
     await addToWallet(guildId, userId, item.price, TX.SHOP_BUY, `Возврат: не удалось выдать роль`);
+    // Возвращаем сток
+    if (item.maxStock > 0) {
+      await db.shopItem.update({
+        where: { id: item.id },
+        data: { currentStock: { increment: 1 } },
+      }).catch((e) => log.error(`Не удалось вернуть сток для ${item.id}`, e));
+    }
     await interaction.reply({ embeds: [ecoError('Не удалось выдать роль. Шекели возвращены.')], ephemeral: true });
     return;
   }

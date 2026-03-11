@@ -101,72 +101,90 @@ const robCommand: BublikCommand = {
         const stolen = Math.max(minSteal, Math.floor(victimProfile.wallet * stealPercent / 100));
 
         // Атомарная транзакция
-        await db.$transaction(async (tx) => {
-          const freshVictim = await tx.economyProfile.findUnique({
-            where: { guildId_userId: { guildId, userId: target.id } },
-          });
-          if (!freshVictim || freshVictim.wallet < stolen) throw new Error('insufficient');
+        try {
+          await db.$transaction(async (tx) => {
+            const freshVictim = await tx.economyProfile.findUnique({
+              where: { guildId_userId: { guildId, userId: target.id } },
+            });
+            if (!freshVictim || freshVictim.wallet < stolen) throw new Error('insufficient');
 
-          const updatedRobber = await tx.economyProfile.update({
-            where: { guildId_userId: { guildId, userId: robberId } },
-            data: {
-              wallet: { increment: stolen },
-              totalEarned: { increment: BigInt(stolen) },
-              lastRob: new Date(),
-            },
-          });
+            const updatedRobber = await tx.economyProfile.update({
+              where: { guildId_userId: { guildId, userId: robberId } },
+              data: {
+                wallet: { increment: stolen },
+                totalEarned: { increment: BigInt(stolen) },
+                lastRob: new Date(),
+              },
+            });
 
-          const updatedVictim = await tx.economyProfile.update({
-            where: { guildId_userId: { guildId, userId: target.id } },
-            data: {
-              wallet: { decrement: stolen },
-              totalSpent: { increment: BigInt(stolen) },
-            },
-          });
+            const updatedVictim = await tx.economyProfile.update({
+              where: { guildId_userId: { guildId, userId: target.id } },
+              data: {
+                wallet: { decrement: stolen },
+                totalSpent: { increment: BigInt(stolen) },
+              },
+            });
 
-          await tx.economyTransaction.create({
-            data: {
-              guildId, userId: robberId, type: TX.ROB_SUCCESS,
-              amount: stolen, balance: updatedRobber.wallet,
-              profileId: robberProfile.id, targetId: target.id,
-              details: `Ограбил <@${target.id}>`,
-            },
-          });
+            await tx.economyTransaction.create({
+              data: {
+                guildId, userId: robberId, type: TX.ROB_SUCCESS,
+                amount: stolen, balance: updatedRobber.wallet,
+                profileId: robberProfile.id, targetId: target.id,
+                details: `Ограбил <@${target.id}>`,
+              },
+            });
 
-          await tx.economyTransaction.create({
-            data: {
-              guildId, userId: target.id, type: TX.ROB_VICTIM,
-              amount: -stolen, balance: updatedVictim.wallet,
-              profileId: victimProfile.id, targetId: robberId,
-              details: `Ограблен <@${robberId}>`,
-            },
+            await tx.economyTransaction.create({
+              data: {
+                guildId, userId: target.id, type: TX.ROB_VICTIM,
+                amount: -stolen, balance: updatedVictim.wallet,
+                profileId: victimProfile.id, targetId: robberId,
+                details: `Ограблен <@${robberId}>`,
+              },
+            });
           });
-        });
+        } catch (err: any) {
+          if (err.message === 'insufficient') {
+            // Жертва успела потратить деньги между проверкой и транзакцией
+            return { type: 'poor_victim' as const, minWallet: minVictimWallet };
+          }
+          throw err;
+        }
 
         await invalidateProfileCache(guildId, robberId);
         await invalidateProfileCache(guildId, target.id);
 
         return { type: 'success' as const, stolen, victimId: target.id };
       } else {
-        // Провал — штраф
+        // Провал — штраф (с fresh read для защиты от отрицательного баланса)
         await db.$transaction(async (tx) => {
+          const freshRobber = await tx.economyProfile.findUnique({
+            where: { guildId_userId: { guildId, userId: robberId } },
+          });
+          if (!freshRobber) throw new Error('no_profile');
+
+          // Штраф не больше того, что есть в кошельке
+          const actualFine = Math.min(fineAmount, freshRobber.wallet);
+
           const updatedRobber = await tx.economyProfile.update({
             where: { guildId_userId: { guildId, userId: robberId } },
             data: {
-              wallet: { decrement: fineAmount },
-              totalSpent: { increment: BigInt(fineAmount) },
+              wallet: { decrement: actualFine },
+              totalSpent: actualFine > 0 ? { increment: BigInt(actualFine) } : undefined,
               lastRob: new Date(),
             },
           });
 
-          await tx.economyTransaction.create({
-            data: {
-              guildId, userId: robberId, type: TX.ROB_FINE,
-              amount: -fineAmount, balance: updatedRobber.wallet,
-              profileId: robberProfile.id, targetId: target.id,
-              details: `Попался при ограблении <@${target.id}>`,
-            },
-          });
+          if (actualFine > 0) {
+            await tx.economyTransaction.create({
+              data: {
+                guildId, userId: robberId, type: TX.ROB_FINE,
+                amount: -actualFine, balance: updatedRobber.wallet,
+                profileId: robberProfile.id, targetId: target.id,
+                details: `Попался при ограблении <@${target.id}>`,
+              },
+            });
+          }
         });
 
         await invalidateProfileCache(guildId, robberId);

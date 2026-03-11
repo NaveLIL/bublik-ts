@@ -127,12 +127,17 @@ const blackjackCommand: BublikCommand = {
     // Проверяем баланс и списываем ставку
     const deductResult = await withFinancialLock(guildId, userId, async () => {
       const profile = await getOrCreateProfile(guildId, userId);
-      if (profile.wallet < bet) return null;
+      if (profile.wallet < bet) return { error: 'no_money' as const };
       await addToWallet(guildId, userId, -bet, TX.CASINO_LOSE, 'BJ: ставка');
       return { wallet: profile.wallet - bet };
     });
 
     if (deductResult === null) {
+      await interaction.reply({ embeds: [ecoLocked()], ephemeral: true });
+      return;
+    }
+
+    if ('error' in deductResult) {
       await interaction.reply({ embeds: [ecoError('Недостаточно шекелей.')], ephemeral: true });
       return;
     }

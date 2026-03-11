@@ -124,6 +124,9 @@ async function tickVoiceEarnings(client: Client): Promise<void> {
       // Если модуль ПБ не настроен — не ошибка
     }
 
+    // PB-роли для множителя заработка
+    const pbRoleIds: string[] = config?.pbRoleIds ?? [];
+
     // Обходим голосовые каналы
     for (const [, channel] of guild.channels.cache) {
       if (!channel.isVoiceBased()) continue;
@@ -142,7 +145,7 @@ async function tickVoiceEarnings(client: Client): Promise<void> {
 
       for (const [memberId, member] of humans) {
         try {
-          await processVoiceMember(guild.id, member, tickAmount, isPbChannel, r, now);
+          await processVoiceMember(guild.id, member, tickAmount, isPbChannel, pbRoleIds, r, now);
         } catch (err) {
           log.error(`Voice tick error for ${memberId} in ${guild.id}`, err);
         }
@@ -162,6 +165,7 @@ async function processVoiceMember(
   member: GuildMember,
   baseTickAmount: number,
   isPbChannel: boolean,
+  pbRoleIds: string[],
   redis: ReturnType<typeof getRedis>,
   now: number,
 ): Promise<void> {
@@ -191,9 +195,7 @@ async function processVoiceMember(
   }
 
   // PB-множитель для голосового заработка
-  // Ставка уже учтена через rateBase/ratePb; множитель по PB-тиру будет добавлен
-  // когда pbRoleIds появится в EconomyConfig (TODO: Phase 2)
-  const multiplier = 1;
+  const { multiplier } = getPbTier(member, pbRoleIds);
 
   const finalAmount = Math.floor(baseTickAmount * multiplier);
   if (finalAmount <= 0) return;
