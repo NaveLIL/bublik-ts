@@ -314,3 +314,110 @@ model Reprimand {
   @@index([offenderId])
   @@map("reprimands")
 }
+
+// ═══════════════════════════════════════════════
+//  Экономика (Economy) — шекели ₪
+// ═══════════════════════════════════════════════
+
+// ── Конфигурация экономики для гильдии ────────
+model EconomyConfig {
+  id              String   @id @default(cuid())
+  guildId         String   @unique
+
+  enabled         Boolean  @default(true)               // экономика включена?
+  newsChannelId   String?                               // канал новостей экономики
+  logChannelId    String?                               // канал логов (админский)
+
+  // Войс-заработок
+  voiceRateBase   Int      @default(50)                 // ₪/ч в обычных войсах
+  voiceRatePb     Int      @default(200)                // ₪/ч в ПБ-войсах
+  voiceMinMembers Int      @default(2)                  // мин. людей в войсе для начислений
+  voiceIntervalMs Int      @default(600000)             // интервал начислений (10 мин)
+
+  // Кулдауны (мс)
+  dailyCooldown   BigInt   @default(86400000)           // 24ч
+  weeklyCooldown  BigInt   @default(604800000)          // 7д
+  workCooldown    BigInt   @default(14400000)            // 4ч
+  crimeCooldown   BigInt   @default(28800000)           // 8ч
+  begCooldown     BigInt   @default(30000)              // 30с
+
+  // Заработок
+  dailyBase       Int      @default(500)                // базовый дейли
+  dailyStreakAdd  Int      @default(50)                 // бонус за стрик (+₪50/день)
+  dailyStreakMax  Int      @default(500)                // макс. бонус стрика
+  weeklyBase      Int      @default(5000)               // базовый викли
+  weeklyPbBonus   Int      @default(2000)               // бонус если играл ПБ на неделе
+  workMin         Int      @default(200)                // мин. за работу
+  workMax         Int      @default(800)                // макс. за работу
+  crimeMin        Int      @default(0)                  // мин. за преступление
+  crimeMax        Int      @default(2000)               // макс. за преступление
+  crimeSuccessRate Int     @default(60)                 // шанс успеха (%)
+  crimeFine       Int      @default(500)                // штраф при провале
+  begMin          Int      @default(5)                  // мин. подаяние
+  begMax          Int      @default(100)                // макс. подаяние
+
+  // Переводы
+  transferTax     Int      @default(5)                  // налог на переводы (%)
+  bankWithdrawTax Int      @default(2)                  // комиссия за снятие из банка (%)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("economy_configs")
+}
+
+// ── Профиль экономики пользователя ────────────
+model EconomyProfile {
+  id              String    @id @default(cuid())
+  guildId         String
+  userId          String
+
+  wallet          Int       @default(0)                 // наличные (кошелёк)
+  bank            Int       @default(0)                 // банковский счёт
+  bankLimit       Int       @default(5000)              // лимит банка (привязан к ПБ-роли)
+
+  dailyStreak     Int       @default(0)                 // текущий стрик дейли
+  bestDailyStreak Int       @default(0)                 // лучший стрик за всё время
+
+  lastDaily       DateTime?                             // последний /daily
+  lastWeekly      DateTime?                             // последний /weekly
+  lastWork        DateTime?                             // последний /work
+  lastCrime       DateTime?                             // последний /crime
+  lastBeg         DateTime?                             // последний /beg
+  lastRob         DateTime?                             // последний /rob
+
+  totalEarned     BigInt    @default(0)                 // всего заработано
+  totalSpent      BigInt    @default(0)                 // всего потрачено
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  transactions    EconomyTransaction[]
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@map("economy_profiles")
+}
+
+// ── Транзакция экономики ──────────────────────
+model EconomyTransaction {
+  id          String   @id @default(cuid())
+  guildId     String
+  userId      String
+
+  type        String                                    // earn_daily, earn_work, earn_voice, transfer_out, transfer_in, rob_success, rob_fail, fine, etc.
+  amount      Int                                       // +/- сумма
+  balance     Int                                       // баланс после транзакции (wallet)
+
+  targetId    String?                                   // другой пользователь (перевод, ограбление)
+  details     String?                                   // доп. информация
+
+  profileId   String
+  profile     EconomyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@index([guildId, userId])
+  @@index([createdAt])
+  @@map("economy_transactions")
+}
