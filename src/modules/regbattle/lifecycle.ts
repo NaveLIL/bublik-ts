@@ -13,7 +13,6 @@ import {
   VoiceChannel,
   TextChannel,
   ChannelType,
-  PermissionsBitField,
   GuildMember,
   Guild,
 } from 'discord.js';
@@ -73,6 +72,29 @@ const playedResetDone = new Set<string>(); // формат 'guildId:YYYY-MM-DD' 
 
 // Трекинг времени в ПБ-войсе: guildId → Map<memberId, joinTimestampMs>
 const voiceSessionMap = new Map<string, Map<string, number>>();
+
+const MASTER_CREATE_START_MINUTES = 16 * 60 + 30; // 16:30 МСК
+const MASTER_CREATE_END_MINUTES = 23 * 60 + 59;   // 23:59 МСК
+
+function getMskClock(now = new Date()): { hour: number; minute: number; hhmm: string } {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Moscow',
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now);
+
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+  const hhmm = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return { hour, minute, hhmm };
+}
+
+function canCreateSquadNowMsk(now = new Date()): boolean {
+  const { hour, minute } = getMskClock(now);
+  const total = hour * 60 + minute;
+  return total >= MASTER_CREATE_START_MINUTES && total <= MASTER_CREATE_END_MINUTES;
+}
 
 /** Записать время входа в ПБ-войс */
 function trackVoiceJoin(guildId: string, memberId: string): void {
@@ -177,6 +199,14 @@ async function handleMasterJoin(
   config: any,
   client: BublikClient,
 ): Promise<void> {
+  // Ограничение времени создания отрядов (МСК): 16:30–23:59
+  if (!canCreateSquadNowMsk()) {
+    const { hhmm } = getMskClock();
+    await member.voice.disconnect('Создание отрядов доступно только с 16:30 до 23:59 МСК').catch(() => null);
+    log.info(`Отклонено: ${member.user.tag} попытка создания отряда вне окна (МСК ${hhmm})`);
+    return;
+  }
+
   // Проверка роли полевого командира
   const isCommander = config.commanderRoleIds.length === 0 ||
     config.commanderRoleIds.some((id: string) => member.roles.cache.has(id));
@@ -207,35 +237,27 @@ async function handleMasterJoin(
     const guildId = state.guild.id;
     const num = await getNextSquadNumber(guildId);
     const name = squadName(num);
+    const masterChannel = await state.guild.channels.fetch(config.masterChannelId).catch(() => null);
+    const masterVoice = masterChannel && masterChannel.type === ChannelType.GuildVoice
+      ? masterChannel as VoiceChannel
+      : null;
+
+    const inheritedOverwrites = masterVoice
+      ? masterVoice.permissionOverwrites.cache.map((ow) => ({
+          id: ow.id,
+          type: ow.type,
+          allow: ow.allow,
+          deny: ow.deny,
+        }))
+      : [];
 
     // Создать голосовой канал
     const vc = await state.guild.channels.create({
       name,
       type: ChannelType.GuildVoice,
-      parent: config.categoryId || undefined,
+      parent: masterVoice?.parentId || config.categoryId || undefined,
       userLimit: 0, // без лимита (до 99)
-      permissionOverwrites: [
-        {
-          id: state.guild.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.Connect,
-            PermissionsBitField.Flags.Speak,
-          ],
-        },
-        {
-          id: client.user!.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.Connect,
-            PermissionsBitField.Flags.Speak,
-            PermissionsBitField.Flags.MuteMembers,
-            PermissionsBitField.Flags.MoveMembers,
-            PermissionsBitField.Flags.ManageChannels,
-            PermissionsBitField.Flags.SendMessages,
-          ],
-        },
-      ],
+      permissionOverwrites: inheritedOverwrites,
     });
 
     // Сохранить в БД

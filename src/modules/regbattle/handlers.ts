@@ -580,6 +580,14 @@ async function handleAviation(
   // Получить категорию основного канала
   const mainVc = guild.channels.cache.get(squad.voiceChannelId) as VoiceChannel | undefined;
   const parentId = mainVc?.parentId || config.categoryId;
+  const inheritedOverwrites = mainVc
+    ? mainVc.permissionOverwrites.cache.map((ow) => ({
+        id: ow.id,
+        type: ow.type,
+        allow: ow.allow,
+        deny: ow.deny,
+      }))
+    : [];
 
   try {
     const airVc = await guild.channels.create({
@@ -587,27 +595,7 @@ async function handleAviation(
       type: ChannelType.GuildVoice,
       parent: parentId || undefined,
       userLimit: config.airSize,
-      permissionOverwrites: [
-        {
-          id: guild.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.Connect,
-            PermissionsBitField.Flags.Speak,
-          ],
-        },
-        {
-          id: client.user!.id,
-          allow: [
-            PermissionsBitField.Flags.ViewChannel,
-            PermissionsBitField.Flags.Connect,
-            PermissionsBitField.Flags.Speak,
-            PermissionsBitField.Flags.MuteMembers,
-            PermissionsBitField.Flags.MoveMembers,
-            PermissionsBitField.Flags.ManageChannels,
-          ],
-        },
-      ],
+      permissionOverwrites: inheritedOverwrites,
     });
 
     // Обновить БД
