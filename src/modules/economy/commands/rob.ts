@@ -96,17 +96,20 @@ const robCommand: BublikCommand = {
       const isSuccess = Math.random() * 100 < successRate;
 
       if (isSuccess) {
-        // Крадём 10-maxPercent% кошелька жертвы
-        const stealPercent = 10 + Math.random() * (maxPercent - 10);
-        const stolen = Math.max(minSteal, Math.floor(victimProfile.wallet * stealPercent / 100));
-
-        // Атомарная транзакция
+        // Атомарная транзакция — stolen вычисляется внутри по fresh wallet
+        let stolen = 0;
         try {
           await db.$transaction(async (tx) => {
             const freshVictim = await tx.economyProfile.findUnique({
               where: { guildId_userId: { guildId, userId: target.id } },
             });
-            if (!freshVictim || freshVictim.wallet < stolen) throw new Error('insufficient');
+            if (!freshVictim || freshVictim.wallet < minVictimWallet) throw new Error('insufficient');
+
+            // Крадём 10-maxPercent% от РЕАЛЬНОГО кошелька жертвы
+            const stealPercent = 10 + Math.random() * (maxPercent - 10);
+            stolen = Math.max(minSteal, Math.floor(freshVictim.wallet * stealPercent / 100));
+            // Не больше того, что есть
+            stolen = Math.min(stolen, freshVictim.wallet);
 
             const updatedRobber = await tx.economyProfile.update({
               where: { guildId_userId: { guildId, userId: robberId } },

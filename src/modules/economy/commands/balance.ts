@@ -125,7 +125,9 @@ const depositCommand: BublikCommand = {
 
       // 0 = всё
       if (amount === 0) amount = profile.wallet;
-      if (amount <= 0) return null;
+      if (amount <= 0) {
+        return { success: false, wallet: profile.wallet, bank: profile.bank, error: 'insufficient_funds' } as import('../profile').BalanceResult;
+      }
 
       const { bankLimit } = getPbTier(member, await getPbRoleIds(guildId));
       return depositToBank(guildId, userId, amount, bankLimit);
@@ -189,7 +191,9 @@ const withdrawCommand: BublikCommand = {
 
       // 0 = всё
       if (amount === 0) amount = profile.bank;
-      if (amount <= 0) return null;
+      if (amount <= 0) {
+        return { success: false, wallet: profile.wallet, bank: profile.bank, tax: 0, error: 'insufficient_bank' } as import('../profile').BalanceResult & { tax: number };
+      }
 
       return withdrawFromBank(guildId, userId, amount, taxPercent);
     });

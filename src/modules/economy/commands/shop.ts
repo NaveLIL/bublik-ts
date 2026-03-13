@@ -228,16 +228,26 @@ async function handleBuy(
     const profile = await getOrCreateProfile(guildId, userId);
     if (profile.wallet < item.price) return { error: 'no_money' as const };
 
-    // Списываем деньги
-    const walletResult = await addToWallet(guildId, userId, -item.price, TX.SHOP_BUY, `Покупка: ${item.name}`);
-    if (!walletResult.success) return { error: 'no_money' as const };
-
-    // Уменьшаем сток
+    // Уменьшаем сток АТОМАРНО (до списания денег — легче откатить)
     if (item.maxStock > 0) {
-      await db.shopItem.update({
-        where: { id: item.id },
+      const stockResult = await db.shopItem.updateMany({
+        where: { id: item.id, currentStock: { gt: 0 } },
         data: { currentStock: { decrement: 1 } },
       });
+      if (stockResult.count === 0) return { error: 'out_of_stock' as const };
+    }
+
+    // Списываем деньги
+    const walletResult = await addToWallet(guildId, userId, -item.price, TX.SHOP_BUY, `Покупка: ${item.name}`);
+    if (!walletResult.success) {
+      // Возвращаем сток если не удалось списать
+      if (item.maxStock > 0) {
+        await db.shopItem.update({
+          where: { id: item.id },
+          data: { currentStock: { increment: 1 } },
+        }).catch((e) => log.error(`Не удалось вернуть сток для ${item.id}`, e));
+      }
+      return { error: 'no_money' as const };
     }
 
     // Записываем покупку
@@ -264,7 +274,11 @@ async function handleBuy(
   }
 
   if ('error' in result) {
-    await interaction.reply({ embeds: [ecoError(`Недостаточно шекелей. Нужно: ${fmt(item.price)}.`)], ephemeral: true });
+    const errorMsgs: Record<string, string> = {
+      no_money: `Недостаточно шекелей. Нужно: ${fmt(item.price)}.`,
+      out_of_stock: 'Товар закончился.',
+    };
+    await interaction.reply({ embeds: [ecoError(errorMsgs[result.error as string] || 'Ошибка покупки.')], ephemeral: true });
     return;
   }
 
