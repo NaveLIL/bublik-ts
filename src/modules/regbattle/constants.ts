@@ -49,7 +49,7 @@ export const DM_PING_COOLDOWN_MS = 5 * 60_000; // 5 минут
 export const DM_SEND_DELAY_MS = 1_000; // 1 секунда
 
 /** Интервал проверки целостности ролей */
-export const ROLE_INTEGRITY_INTERVAL_MS = 60_000; // 60 секунд
+export const ROLE_INTEGRITY_INTERVAL_MS = 30_000; // 30 секунд (ускорено для компенсации shard reconnects)
 
 /** Кол-во пингов роли до эскалации к именным (по умолчанию: 6 × 5мин = 30 мин) */
 export const DEFAULT_PING_ESCALATE_AFTER = 6;

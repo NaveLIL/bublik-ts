@@ -4,6 +4,7 @@ import {
   ButtonStyle,
   ActionRowBuilder,
   GuildMember,
+  TextChannel,
 } from 'discord.js';
 import type { BublikClient } from '../../bot';
 import { Config } from '../../config';
@@ -228,10 +229,12 @@ async function handleJoin(interaction: ButtonInteraction, client: BublikClient):
     components: [buildRulesButtons(userId, false, false)],
   });
 
-  // Потом редактируем публичное сообщение (убираем кнопки)
+  // Редактируем публичное сообщение — показываем статус, но СОХРАНЯЕМ кнопки,
+  // чтобы пользователь мог повторить попытку если ephemeral-взаимодействие
+  // сломалось (shard reconnect, таймаут и т.п.)
   await interaction.message.edit({
     embeds: [buildWelcomeChosenEmbed(member, true)],
-    components: [],
+    components: [buildWelcomeButtons(userId)],
   }).catch((err) => log.warn('Не удалось обновить welcome-сообщение', err));
 
   log.info(`[Welcome] ${interaction.user.tag} выбрал вступление в полк`);
@@ -339,10 +342,12 @@ async function handleRulesDone(interaction: ButtonInteraction, client: BublikCli
   }
 
   // 1. Выдаем роль новобранца (если настроена)
+  let roleAssigned = false;
   if (recruitRoleId && interaction.guild) {
     try {
       const member = await interaction.guild.members.fetch(userId);
       await member.roles.add(recruitRoleId, 'Ознакомлен с правилами полка — Bublik Bot');
+      roleAssigned = true;
       log.info(`Роль новобранца ${recruitRoleId} выдана пользователю ${userId}`);
     } catch (err) {
       log.error(`Не удалось выдать роль ${recruitRoleId} пользователю ${userId}`, err);
@@ -355,7 +360,34 @@ async function handleRulesDone(interaction: ButtonInteraction, client: BublikCli
     components: [],
   });
 
-  // 3. Чистим состояние из Redis
+  // 3. Убираем кнопки из публичного welcome-сообщения (роль выдана — повторная попытка не нужна)
+  if (roleAssigned) {
+    const welcomeChannelId = Config.welcomeChannelId;
+    if (welcomeChannelId && interaction.guild) {
+      try {
+        const welcomeChannel = await interaction.guild.channels.fetch(welcomeChannelId).catch(() => null);
+        if (welcomeChannel && welcomeChannel.isTextBased()) {
+          const messages = await (welcomeChannel as TextChannel).messages.fetch({ limit: 50 });
+          const welcomeMsg = messages.find(
+            (m) => m.author.id === interaction.client.user?.id &&
+                   m.components.length > 0 &&
+                   (m.components[0] as any)?.components?.[0]?.customId?.includes(userId),
+          );
+          if (welcomeMsg) {
+            const member = interaction.member as GuildMember;
+            await welcomeMsg.edit({
+              embeds: [buildWelcomeChosenEmbed(member, true)],
+              components: [],
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        log.debug(`Не удалось очистить публичное welcome-сообщение: ${String(err)}`);
+      }
+    }
+  }
+
+  // 4. Чистим состояние из Redis
   await clearState(userId);
 
   log.info(`[Welcome] ${interaction.user.tag} завершил ознакомление, роль выдана → тикеты`);

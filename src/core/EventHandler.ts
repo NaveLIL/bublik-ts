@@ -99,6 +99,10 @@ export function registerCoreEvents(client: BublikClient): void {
     log.info(`Shard ${id} переподключается…`);
   });
 
+  client.on(Events.ShardResume, (id: number, replayedEvents: number) => {
+    log.info(`Shard ${id} восстановлен (${replayedEvents} событий переиграно)`);
+  });
+
   client.on(Events.ShardError, (error: Error, id: number) => {
     log.error(`Shard ${id} ошибка`, error);
     errorReporter.report({

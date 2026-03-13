@@ -22,8 +22,8 @@ const log = logger.child('Module:welcome');
 // ── Таймер напоминаний (хранится на уровне модуля) ──
 let reminderTimer: ReturnType<typeof setInterval> | null = null;
 
-const REMINDER_INTERVAL_MS = 24 * 60 * 60 * 1_000; // 24 часа
-const MAX_REMINDERS_PER_CYCLE = 3;                  // макс. пингов за цикл (рейт-лимит)
+const REMINDER_INTERVAL_MS = 60 * 60 * 1_000;       // 1 час (как задумано)
+const MAX_REMINDERS_PER_CYCLE = 10;                  // макс. пингов за цикл
 const DELAY_BETWEEN_MS = 2_000;                // 2 с задержка между пингами
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -217,7 +217,7 @@ const welcomeModule: BublikModule = {
       );
     }, REMINDER_INTERVAL_MS);
 
-    log.info('Модуль приветствия загружен ✓ (напоминания: каждый час, макс. 3/цикл)');
+    log.info('Модуль приветствия загружен ✓ (напоминания: каждый час, макс. 10/цикл)');
   },
 
   async onUnload(_client) {
