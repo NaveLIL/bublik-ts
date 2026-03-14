@@ -78,6 +78,18 @@ import { recalculatePinger } from './pinger';
 
 const log = logger.child('RegBattle:Handlers');
 
+function isTransientInteractionError(err: unknown): boolean {
+  const anyErr = err as any;
+  const message = String(anyErr?.message ?? anyErr ?? '');
+
+  return (
+    anyErr?.code === 10062 ||
+    message.includes('Unknown interaction') ||
+    message.includes('EAI_AGAIN') ||
+    message.includes('getaddrinfo EAI_AGAIN')
+  );
+}
+
 // Активные мьюты (squadId → timeout). Для предотвращения дублирования.
 const activeMutes = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -187,6 +199,11 @@ export async function handleRegBattleInteraction(
       return;
     }
   } catch (err) {
+    if (isTransientInteractionError(err)) {
+      log.warn('Транзиентная ошибка в regbattle interaction (пропускаем репорт)', { error: String(err) });
+      return;
+    }
+
     log.error('Ошибка в обработчике regbattle', { error: String(err) });
     errorReporter.eventError(err, 'interactionCreate', 'regbattle');
 
