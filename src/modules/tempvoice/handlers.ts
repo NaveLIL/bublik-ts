@@ -63,6 +63,8 @@ import {
   getMemberVoiceChannel,
 } from './utils';
 
+import { isTransientInteractionError } from '../../utils/helpers';
+
 import {
   buildMainPageEmbed,
   buildMainPageButtons,
@@ -203,6 +205,11 @@ export async function handleTempVoiceButton(
         log.warn(`Неизвестное tv-действие: ${action}`);
     }
   } catch (err) {
+    if (isTransientInteractionError(err)) {
+      log.warn('Транзиентная ошибка в tempvoice interaction (пропускаем репорт)', { error: String(err) });
+      return;
+    }
+
     log.error(`Ошибка tv-кнопки "${action}"`, { error: String(err) });
     errorReporter.componentError(err, interaction, `tv:${action}`);
     if (!interaction.replied && !interaction.deferred) {
@@ -602,40 +609,45 @@ async function handleTrust(
 
   collector.on('collect', async (sel: UserSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
+    try {
+      const targetId = sel.values[0];
 
-    if (targetId === interaction.user.id) {
-      await sel.update({ content: '❌ Нельзя добавить себя.', components: [] });
-      return;
+      if (targetId === interaction.user.id) {
+        await sel.update({ content: '❌ Нельзя добавить себя.', components: [] });
+        return;
+      }
+
+      // Нельзя добавить бота
+      const targetUser = await interaction.guild!.members.fetch(targetId).catch(() => null);
+      if (targetUser?.user.bot) {
+        await sel.update({ content: '❌ Нельзя добавить бота.', components: [] });
+        return;
+      }
+
+      // Лимит доверенных
+      const currentTrusted = await getTrusted(channelData.id);
+      if (currentTrusted.length >= 25) {
+        await sel.update({ content: '❌ Максимум 25 доверенных пользователей.', components: [] });
+        return;
+      }
+
+      await addTrusted(channelData.id, targetId);
+
+      // Обновить permissions
+      const updatedData = await getChannel(channelData.id);
+      if (updatedData) {
+        const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
+        await vc.permissionOverwrites.set(overwrites).catch(() => null);
+      }
+
+      await sel.update({
+        content: `✅ <@${targetId}> добавлен в доверенные.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector trust', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
     }
-
-    // Нельзя добавить бота
-    const targetUser = await interaction.guild!.members.fetch(targetId).catch(() => null);
-    if (targetUser?.user.bot) {
-      await sel.update({ content: '❌ Нельзя добавить бота.', components: [] });
-      return;
-    }
-
-    // Лимит доверенных
-    const currentTrusted = await getTrusted(channelData.id);
-    if (currentTrusted.length >= 25) {
-      await sel.update({ content: '❌ Максимум 25 доверенных пользователей.', components: [] });
-      return;
-    }
-
-    await addTrusted(channelData.id, targetId);
-
-    // Обновить permissions
-    const updatedData = await getChannel(channelData.id);
-    if (updatedData) {
-      const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
-      await vc.permissionOverwrites.set(overwrites).catch(() => null);
-    }
-
-    await sel.update({
-      content: `✅ <@${targetId}> добавлен в доверенные.`,
-      components: [],
-    });
   });
 
   collector.on('end', (collected) => {
@@ -680,25 +692,30 @@ async function handleUntrust(
 
   collector.on('collect', async (sel: UserSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
+    try {
+      const targetId = sel.values[0];
 
-    if (!trustedList.includes(targetId)) {
-      await sel.update({ content: '❌ Пользователь не в списке доверенных.', components: [] });
-      return;
+      if (!trustedList.includes(targetId)) {
+        await sel.update({ content: '❌ Пользователь не в списке доверенных.', components: [] });
+        return;
+      }
+
+      await removeTrusted(channelData.id, targetId);
+
+      const updatedData = await getChannel(channelData.id);
+      if (updatedData) {
+        const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
+        await vc.permissionOverwrites.set(overwrites).catch(() => null);
+      }
+
+      await sel.update({
+        content: `🚫 <@${targetId}> убран из доверенных.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector untrust', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
     }
-
-    await removeTrusted(channelData.id, targetId);
-
-    const updatedData = await getChannel(channelData.id);
-    if (updatedData) {
-      const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
-      await vc.permissionOverwrites.set(overwrites).catch(() => null);
-    }
-
-    await sel.update({
-      content: `🚫 <@${targetId}> убран из доверенных.`,
-      components: [],
-    });
   });
 
   collector.on('end', (collected) => {
@@ -741,51 +758,56 @@ async function handleBlock(
 
   collector.on('collect', async (sel: UserSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
+    try {
+      const targetId = sel.values[0];
 
-    if (targetId === interaction.user.id) {
-      await sel.update({ content: '❌ Нельзя заблокировать себя.', components: [] });
-      return;
+      if (targetId === interaction.user.id) {
+        await sel.update({ content: '❌ Нельзя заблокировать себя.', components: [] });
+        return;
+      }
+
+      // Нельзя блокировать бота или модератора
+      const targetMember = await interaction.guild!.members.fetch(targetId).catch(() => null);
+      if (targetMember?.user.bot) {
+        await sel.update({ content: '❌ Нельзя заблокировать бота.', components: [] });
+        return;
+      }
+
+      // Лимит заблокированных
+      const currentBlocked = await getBlocked(channelData.id);
+      if (currentBlocked.length >= 25) {
+        await sel.update({ content: '❌ Максимум 25 заблокированных пользователей.', components: [] });
+        return;
+      };
+      if (targetMember && generator.immuneRoleIds.length > 0 && generator.immuneRoleIds.some((rid) => targetMember.roles.cache.has(rid))) {
+        await sel.update({ content: '❌ Нельзя заблокировать модератора.', components: [] });
+        return;
+      }
+
+      await addBlocked(channelData.id, targetId);
+      // Убрать из доверенных если был
+      await removeTrusted(channelData.id, targetId);
+
+      // Обновить permissions
+      const updatedData = await getChannel(channelData.id);
+      if (updatedData) {
+        const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
+        await vc.permissionOverwrites.set(overwrites).catch(() => null);
+      }
+
+      // Кикнуть из канала если в нём
+      if (vc.members.has(targetId) && targetMember) {
+        await targetMember.voice.disconnect('Заблокирован владельцем канала').catch(() => null);
+      }
+
+      await sel.update({
+        content: `⛔ <@${targetId}> заблокирован и отключён от канала.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector block', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
     }
-
-    // Нельзя блокировать бота или модератора
-    const targetMember = await interaction.guild!.members.fetch(targetId).catch(() => null);
-    if (targetMember?.user.bot) {
-      await sel.update({ content: '❌ Нельзя заблокировать бота.', components: [] });
-      return;
-    }
-
-    // Лимит заблокированных
-    const currentBlocked = await getBlocked(channelData.id);
-    if (currentBlocked.length >= 25) {
-      await sel.update({ content: '❌ Максимум 25 заблокированных пользователей.', components: [] });
-      return;
-    };
-    if (targetMember && generator.immuneRoleIds.length > 0 && generator.immuneRoleIds.some((rid) => targetMember.roles.cache.has(rid))) {
-      await sel.update({ content: '❌ Нельзя заблокировать модератора.', components: [] });
-      return;
-    }
-
-    await addBlocked(channelData.id, targetId);
-    // Убрать из доверенных если был
-    await removeTrusted(channelData.id, targetId);
-
-    // Обновить permissions
-    const updatedData = await getChannel(channelData.id);
-    if (updatedData) {
-      const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
-      await vc.permissionOverwrites.set(overwrites).catch(() => null);
-    }
-
-    // Кикнуть из канала если в нём
-    if (vc.members.has(targetId) && targetMember) {
-      await targetMember.voice.disconnect('Заблокирован владельцем канала').catch(() => null);
-    }
-
-    await sel.update({
-      content: `⛔ <@${targetId}> заблокирован и отключён от канала.`,
-      components: [],
-    });
   });
 
   collector.on('end', (collected) => {
@@ -830,25 +852,30 @@ async function handleUnblock(
 
   collector.on('collect', async (sel: UserSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
+    try {
+      const targetId = sel.values[0];
 
-    if (!blockedList.includes(targetId)) {
-      await sel.update({ content: '❌ Пользователь не в блок-листе.', components: [] });
-      return;
+      if (!blockedList.includes(targetId)) {
+        await sel.update({ content: '❌ Пользователь не в блок-листе.', components: [] });
+        return;
+      }
+
+      await removeBlocked(channelData.id, targetId);
+
+      const updatedData = await getChannel(channelData.id);
+      if (updatedData) {
+        const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
+        await vc.permissionOverwrites.set(overwrites).catch(() => null);
+      }
+
+      await sel.update({
+        content: `⭕ <@${targetId}> разблокирован.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector unblock', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
     }
-
-    await removeBlocked(channelData.id, targetId);
-
-    const updatedData = await getChannel(channelData.id);
-    if (updatedData) {
-      const overwrites = await buildPermissionOverwrites(updatedData, generator, vc.guild, vc.client.user!.id);
-      await vc.permissionOverwrites.set(overwrites).catch(() => null);
-    }
-
-    await sel.update({
-      content: `⭕ <@${targetId}> разблокирован.`,
-      components: [],
-    });
   });
 
   collector.on('end', (collected) => {
@@ -906,17 +933,22 @@ async function handleKick(
 
   collector.on('collect', async (sel: StringSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
-    const targetMember = vc.members.get(targetId);
+    try {
+      const targetId = sel.values[0];
+      const targetMember = vc.members.get(targetId);
 
-    if (targetMember) {
-      await targetMember.voice.disconnect('Кикнут владельцем канала').catch(() => null);
+      if (targetMember) {
+        await targetMember.voice.disconnect('Кикнут владельцем канала').catch(() => null);
+      }
+
+      await sel.update({
+        content: `👢 <@${targetId}> отключён от канала.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector kick', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
     }
-
-    await sel.update({
-      content: `👢 <@${targetId}> отключён от канала.`,
-      components: [],
-    });
   });
 
   collector.on('end', (collected) => {
@@ -969,21 +1001,26 @@ async function handleTransfer(
 
   collector.on('collect', async (sel: StringSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const targetId = sel.values[0];
+    try {
+      const targetId = sel.values[0];
 
-    const updated = await updateChannel(channelData.id, { ownerId: targetId });
-    const overwrites = await buildPermissionOverwrites(updated, generator, vc.guild, vc.client.user!.id);
-    await vc.permissionOverwrites.set(overwrites).catch(() => null);
+      const updated = await updateChannel(channelData.id, { ownerId: targetId });
+      const overwrites = await buildPermissionOverwrites(updated, generator, vc.guild, vc.client.user!.id);
+      await vc.permissionOverwrites.set(overwrites).catch(() => null);
 
-    await sel.update({
-      content: `🔄 Владение передано <@${targetId}>.`,
-      components: [],
-    });
+      await sel.update({
+        content: `🔄 Владение передано <@${targetId}>.`,
+        components: [],
+      });
 
-    // Обновить панель
-    await refreshControlPanel(interaction, vc, updated, generator);
+      // Обновить панель
+      await refreshControlPanel(interaction, vc, updated, generator);
 
-    log.info(`Transfer: ${member.user.tag} → ${targetId} в ${vc.name}`);
+      log.info(`Transfer: ${member.user.tag} → ${targetId} в ${vc.name}`);
+    } catch (err) {
+      log.error('Ошибка в collector transfer', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
+    }
   });
 
   collector.on('end', (collected) => {
@@ -1076,13 +1113,18 @@ async function handleBitrate(
 
   collector.on('collect', async (sel: StringSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const bitrate = parseInt(sel.values[0], 10);
-    await vc.setBitrate(bitrate).catch(() => null);
+    try {
+      const bitrate = parseInt(sel.values[0], 10);
+      await vc.setBitrate(bitrate).catch(() => null);
 
-    await sel.update({
-      content: `🎚️ Битрейт установлен на **${Math.floor(bitrate / 1000)} кбит/с**.`,
-      components: [],
-    });
+      await sel.update({
+        content: `🎚️ Битрейт установлен на **${Math.floor(bitrate / 1000)} кбит/с**.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector bitrate', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
+    }
   });
 
   collector.on('end', (collected) => {
@@ -1138,14 +1180,19 @@ async function handleRegion(
 
   collector.on('collect', async (sel: StringSelectMenuInteraction) => {
     clearActiveInteraction(interaction.user.id);
-    const region = sel.values[0] === 'auto' ? null : sel.values[0];
-    await vc.setRTCRegion(region).catch(() => null);
+    try {
+      const region = sel.values[0] === 'auto' ? null : sel.values[0];
+      await vc.setRTCRegion(region).catch(() => null);
 
-    const label = VOICE_REGIONS.find((r) => r.value === sel.values[0])?.label ?? sel.values[0];
-    await sel.update({
-      content: `🌐 Регион изменён на **${label}**.`,
-      components: [],
-    });
+      const label = VOICE_REGIONS.find((r) => r.value === sel.values[0])?.label ?? sel.values[0];
+      await sel.update({
+        content: `🌐 Регион изменён на **${label}**.`,
+        components: [],
+      });
+    } catch (err) {
+      log.error('Ошибка в collector region', { error: String(err) });
+      await sel.update({ content: '❌ Произошла ошибка.', components: [] }).catch(() => {});
+    }
   });
 
   collector.on('end', (collected) => {

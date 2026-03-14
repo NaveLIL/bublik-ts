@@ -13,6 +13,7 @@ import {
 import type { BublikClient } from '../../bot';
 import { logger } from '../../core/Logger';
 import { errorReporter } from '../../core/ErrorReporter';
+import { getRedis } from '../../core/Redis';
 
 import {
   VAC_PREFIX,
@@ -63,19 +64,9 @@ import {
   vacWarn,
 } from './embeds';
 
+import { isTransientInteractionError } from '../../utils/helpers';
+
 const log = logger.child('Vacation:Handlers');
-
-function isTransientInteractionError(err: unknown): boolean {
-  const anyErr = err as any;
-  const message = String(anyErr?.message ?? anyErr ?? '');
-
-  return (
-    anyErr?.code === 10062 ||
-    message.includes('Unknown interaction') ||
-    message.includes('EAI_AGAIN') ||
-    message.includes('getaddrinfo EAI_AGAIN')
-  );
-}
 
 // ═══════════════════════════════════════════════
 //  Роутер интеракций
@@ -557,6 +548,15 @@ async function handleQuickButton(
 
   await interaction.deferReply({ ephemeral: true });
 
+  // Атомарная блокировка — защита от double-click
+  const lockKey = `vac:quick:lock:${guildId}:${userId}`;
+  const locked = await getRedis().set(lockKey, '1', 'EX', 30, 'NX');
+  if (!locked) {
+    await interaction.editReply({ embeds: [vacWarn('Запрос уже обрабатывается. Подождите.')] });
+    return;
+  }
+
+  try {
   // Повторная проверка (от race conditions — два быстрых клика одновременно)
   const activeRecheck = await getActiveVacation(guildId, userId);
   if (activeRecheck) {
@@ -608,6 +608,9 @@ async function handleQuickButton(
   });
 
   log.info(`Быстрый отпуск: ${interaction.user.tag} на ${config.quickDurationH}ч`);
+  } finally {
+    await getRedis().del(lockKey);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -648,6 +651,23 @@ async function handleApproveButton(
 
   await interaction.deferReply({ ephemeral: true });
 
+  // Атомарная блокировка — защита от одновременного approve/deny
+  const lockKey = `vac:review:lock:${requestId}`;
+  const locked = await getRedis().set(lockKey, '1', 'EX', 30, 'NX');
+  if (!locked) {
+    await interaction.editReply({ embeds: [vacWarn('Заявка уже обрабатывается другим ревьюером.')] });
+    return;
+  }
+
+  // Перепроверить статус после получения блокировки
+  const freshRequest = await getRequest(requestId);
+  if (!freshRequest || freshRequest.status !== VacationStatus.Pending) {
+    await getRedis().del(lockKey);
+    await interaction.editReply({ embeds: [vacWarn('Эта заявка уже рассмотрена.')] });
+    return;
+  }
+
+  try {
   const guild = interaction.guild!;
   const member = await guild.members.fetch(request.userId).catch(() => null);
 
@@ -723,6 +743,9 @@ async function handleApproveButton(
   });
 
   log.info(`Заявка одобрена: ${member.user.tag} — ревьюер ${reviewer.user.tag}`);
+  } finally {
+    await getRedis().del(lockKey);
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -762,6 +785,23 @@ async function handleDenyButton(
 
   await interaction.deferReply({ ephemeral: true });
 
+  // Атомарная блокировка — защита от одновременного approve/deny (тот же ключ что и у approve)
+  const lockKey = `vac:review:lock:${requestId}`;
+  const locked = await getRedis().set(lockKey, '1', 'EX', 30, 'NX');
+  if (!locked) {
+    await interaction.editReply({ embeds: [vacWarn('Заявка уже обрабатывается. Подождите.')] });
+    return;
+  }
+
+  // Перепроверить статус после получения блокировки
+  const freshRequest = await getRequest(requestId);
+  if (!freshRequest || freshRequest.status !== VacationStatus.Pending) {
+    await getRedis().del(lockKey);
+    await interaction.editReply({ embeds: [vacWarn('Эта заявка уже рассмотрена.')] });
+    return;
+  }
+
+  try {
   // Обновить заявку
   await updateRequest(requestId, {
     status: VacationStatus.Denied,
@@ -794,4 +834,7 @@ async function handleDenyButton(
   });
 
   log.info(`Заявка ${statusText}: ${request.userId} — ревьюер ${reviewer.user.tag}`);
+  } finally {
+    await getRedis().del(lockKey);
+  }
 }

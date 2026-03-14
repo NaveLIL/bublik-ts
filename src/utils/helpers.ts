@@ -63,3 +63,19 @@ export const categoryEmojis: Record<string, string> = {
   music: '🎵',
   economy: '💰',
 };
+
+/**
+ * Проверяет, является ли ошибка транзиентной ошибкой Discord-интеракции,
+ * которую не нужно репортить как критическую (Unknown interaction, EAI_AGAIN).
+ */
+export function isTransientInteractionError(err: unknown): boolean {
+  const anyErr = err as any;
+  const message = String(anyErr?.message ?? anyErr ?? '');
+
+  return (
+    anyErr?.code === 10062 ||
+    message.includes('Unknown interaction') ||
+    message.includes('EAI_AGAIN') ||
+    message.includes('getaddrinfo EAI_AGAIN')
+  );
+}

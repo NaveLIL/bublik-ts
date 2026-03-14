@@ -75,20 +75,9 @@ import {
 
 import { updateControlPanel } from './lifecycle';
 import { recalculatePinger } from './pinger';
+import { isTransientInteractionError } from '../../utils/helpers';
 
 const log = logger.child('RegBattle:Handlers');
-
-function isTransientInteractionError(err: unknown): boolean {
-  const anyErr = err as any;
-  const message = String(anyErr?.message ?? anyErr ?? '');
-
-  return (
-    anyErr?.code === 10062 ||
-    message.includes('Unknown interaction') ||
-    message.includes('EAI_AGAIN') ||
-    message.includes('getaddrinfo EAI_AGAIN')
-  );
-}
 
 // Активные мьюты (squadId → timeout). Для предотвращения дублирования.
 const activeMutes = new Map<string, ReturnType<typeof setTimeout>>();

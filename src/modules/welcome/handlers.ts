@@ -11,6 +11,7 @@ import { Config } from '../../config';
 import { cacheGet, cacheSet, cacheDel } from '../../core/Redis';
 import { logger } from '../../core/Logger';
 import { errorReporter } from '../../core/ErrorReporter';
+import { isTransientInteractionError } from '../../utils/helpers';
 import {
   buildWelcomeChosenEmbed,
   buildRulesPromptEmbed,
@@ -199,6 +200,11 @@ export async function handleWelcomeButton(
         log.warn(`Неизвестное welcome-действие: ${action}`);
     }
   } catch (err) {
+    if (isTransientInteractionError(err)) {
+      log.warn('Транзиентная ошибка в welcome interaction (пропускаем репорт)', { error: String(err) });
+      return;
+    }
+
     log.error(`Ошибка обработки welcome-кнопки "${action}"`, err);
     errorReporter.componentError(err, interaction, `welcome:${action}`);
     if (!interaction.replied && !interaction.deferred) {
