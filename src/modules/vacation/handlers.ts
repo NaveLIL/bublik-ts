@@ -65,6 +65,18 @@ import {
 
 const log = logger.child('Vacation:Handlers');
 
+function isTransientInteractionError(err: unknown): boolean {
+  const anyErr = err as any;
+  const message = String(anyErr?.message ?? anyErr ?? '');
+
+  return (
+    anyErr?.code === 10062 ||
+    message.includes('Unknown interaction') ||
+    message.includes('EAI_AGAIN') ||
+    message.includes('getaddrinfo EAI_AGAIN')
+  );
+}
+
 // ═══════════════════════════════════════════════
 //  Роутер интеракций
 // ═══════════════════════════════════════════════
@@ -118,6 +130,11 @@ export async function handleVacationInteraction(
       return;
     }
   } catch (err) {
+    if (isTransientInteractionError(err)) {
+      log.warn('Транзиентная ошибка в vacation interaction (пропускаем репорт)', { error: String(err) });
+      return;
+    }
+
     log.error('Ошибка в обработчике vacation', { error: String(err) });
     errorReporter.eventError(err, 'interactionCreate', 'vacation');
 
@@ -411,13 +428,14 @@ async function handleReturnButton(
   const guildId = interaction.guildId;
   const userId = interaction.user.id;
 
+  // ВАЖНО: подтверждаем interaction сразу, чтобы token не протух до DB-операций
+  await interaction.deferReply({ ephemeral: true });
+
   const active = await getActiveVacation(guildId, userId);
   if (!active) {
-    await interaction.reply({ embeds: [vacWarn('Вы не находитесь в отпуске.')], ephemeral: true });
+    await interaction.editReply({ embeds: [vacWarn('Вы не находитесь в отпуске.')] });
     return;
   }
-
-  await interaction.deferReply({ ephemeral: true });
 
   const member = interaction.member as GuildMember;
   const config = active.config;
