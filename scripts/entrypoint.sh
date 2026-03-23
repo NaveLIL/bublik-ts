@@ -1,15 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "╔════════════════════════════════════╗"
-echo "║   Bublik Bot — Applying schema…    ║"
-echo "╚════════════════════════════════════╝"
+echo "applying db schema..."
 
-# Применяем схему Prisma к БД (создаёт/обновляет таблицы)
-npx prisma db push --skip-generate
 
-echo "✓ Database schema applied"
-echo ""
-echo "Starting Bublik Bot…"
+npx prisma db push --skip-generate --accept-data-loss
+
+echo "ok, starting bot"
 
 exec node dist/index.js

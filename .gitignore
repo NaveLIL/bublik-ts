@@ -1,9 +1,16 @@
 node_modules
 dist
-dist-protected
 *.js.map
+*.d.ts.map
 *.tsbuildinfo
 .env
 .env.local
 .env.*.local
 logs/
+
+# Исходники — только локально, в репо пушится только dist-protected/
+src/
+
+# Декларации типов в dist-protected — раскрывают структуру кода
+*.d.ts
+*.d.ts.map

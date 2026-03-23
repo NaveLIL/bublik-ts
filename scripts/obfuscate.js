@@ -1,9 +1,4 @@
-/**
- * Скрипт обфускации скомпилированного кода.
- * Запуск: node scripts/obfuscate.js
- *
- * Защищает dist/ от реверс-инжиниринга.
- */
+// обфускация dist/ -> dist-protected/
 
 const JavaScriptObfuscator = require('javascript-obfuscator');
 const fs = require('fs');
@@ -12,7 +7,7 @@ const path = require('path');
 const DIST_DIR = path.resolve(__dirname, '..', 'dist');
 const OUTPUT_DIR = path.resolve(__dirname, '..', 'dist-protected');
 
-// Конфигурация обфускатора
+
 const obfuscatorConfig = {
   compact: true,
   controlFlowFlattening: true,
@@ -65,29 +60,28 @@ function processDirectory(dir, outDir) {
         console.log(`✓ ${path.relative(DIST_DIR, srcPath)}`);
       } catch (err) {
         console.error(`✗ ${path.relative(DIST_DIR, srcPath)}: ${err.message}`);
-        // Если обфускация не удалась — копируем как есть
+
         fs.copyFileSync(srcPath, destPath);
       }
     } else {
-      // Копируем остальные файлы (JSON, .d.ts и т.д.)
+
       fs.copyFileSync(srcPath, destPath);
     }
   }
 }
 
-console.log('🔒 Обфускация dist/ → dist-protected/\n');
+console.log('obfuscating dist/ -> dist-protected/\n');
 
 if (!fs.existsSync(DIST_DIR)) {
-  console.error('❌ Папка dist/ не найдена. Сначала выполните npm run build');
+  console.error('dist/ not found, run npm run build first');
   process.exit(1);
 }
 
-// Очистка предыдущей сборки
+
 if (fs.existsSync(OUTPUT_DIR)) {
   fs.rmSync(OUTPUT_DIR, { recursive: true });
 }
 
 processDirectory(DIST_DIR, OUTPUT_DIR);
 
-console.log('\n✅ Обфускация завершена! Результат в dist-protected/');
-console.log('   Используйте dist-protected/ для деплоя вместо dist/');
+console.log('\ndone, output in dist-protected/');

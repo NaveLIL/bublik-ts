@@ -8,19 +8,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ── Настройки гильдии ────────────────────────
+// --- Core ---
+
 model GuildSettings {
   id        String   @id @default(cuid())
   guildId   String   @unique
   locale    String   @default("ru")
   prefix    String   @default("/")
+
+  // welcome & roles
+  welcomeChannelId String?
+  ticketChannelId  String?
+  autoRoleId       String?
+  recruitRoleId    String?
+  memberRoleId     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@map("guild_settings")
 }
 
-// ── Пользователь ─────────────────────────────
 model User {
   id        String   @id @default(cuid())
   discordId String   @unique
@@ -31,13 +39,393 @@ model User {
   @@map("users")
 }
 
-// ── Лог модулей ──────────────────────────────
 model ModuleLog {
   id         String   @id @default(cuid())
   moduleName String
-  action     String   // load | unload | reload | error
+  action     String
   details    String?
   createdAt  DateTime @default(now())
 
   @@map("module_logs")
+}
+
+// --- Economy ---
+
+model EconomyConfig {
+  id                String   @id @default(cuid())
+  guildId           String   @unique
+  enabled           Boolean  @default(true)
+  newsChannelId     String?
+  logChannelId      String?
+
+  // Voice rewards
+  voiceRateBase     Int      @default(50)
+  voiceRatePb       Int      @default(200)
+  voiceMinMembers   Int      @default(2)
+  voiceIntervalMs   Int      @default(600000)
+
+  // Cooldowns (ms)
+  dailyCooldown     BigInt   @default(86400000)
+  weeklyCooldown    BigInt   @default(604800000)
+  workCooldown      BigInt   @default(14400000)
+  crimeCooldown     BigInt   @default(28800000)
+  begCooldown       BigInt   @default(30000)
+
+  // Rewards
+  dailyBase         Int      @default(500)
+  dailyStreakAdd    Int      @default(50)
+  dailyStreakMax    Int      @default(500)
+  weeklyBase        Int      @default(5000)
+  weeklyPbBonus     Int      @default(2000)
+  workMin           Int      @default(200)
+  workMax           Int      @default(800)
+  crimeMin          Int      @default(0)
+  crimeMax          Int      @default(2000)
+  crimeSuccessRate  Int      @default(60)
+  crimeFine         Int      @default(500)
+  begMin            Int      @default(5)
+  begMax            Int      @default(100)
+
+  // Taxes
+  transferTax       Int      @default(5)
+  bankWithdrawTax   Int      @default(2)
+
+  // Casino
+  casinoEnabled     Boolean  @default(true)
+  casinoMaxBet      Int      @default(50000)
+  casinoMinBet      Int      @default(50)
+
+  // PB roles
+  pbRoleIds         String[] @default([])
+
+  // Rob
+  robCooldown       BigInt   @default(14400000)
+  robEnabled        Boolean  @default(true)
+  robFine           Int      @default(500)
+  robMaxPercent     Int      @default(30)
+  robMinSteal       Int      @default(100)
+  robSuccessRate    Int      @default(45)
+
+  // Shop
+  shopEnabled       Boolean  @default(true)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  shopItems         ShopItem[]
+
+  @@map("economy_configs")
+}
+
+model EconomyProfile {
+  id              String    @id @default(cuid())
+  guildId         String
+  userId          String
+  wallet          Int       @default(0)
+  bank            Int       @default(0)
+  bankLimit       Int       @default(5000)
+  dailyStreak     Int       @default(0)
+  bestDailyStreak Int       @default(0)
+  lastDaily       DateTime?
+  lastWeekly      DateTime?
+  lastWork        DateTime?
+  lastCrime       DateTime?
+  lastBeg         DateTime?
+  lastRob         DateTime?
+  totalEarned     BigInt    @default(0)
+  totalSpent      BigInt    @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  transactions    EconomyTransaction[]
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@map("economy_profiles")
+}
+
+model EconomyTransaction {
+  id        String   @id @default(cuid())
+  guildId   String
+  userId    String
+  type      String
+  amount    Int
+  balance   Int
+  targetId  String?
+  details   String?
+  profileId String
+  createdAt DateTime @default(now())
+
+  profile   EconomyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId])
+  @@index([createdAt])
+  @@map("economy_transactions")
+}
+
+// --- Shop ---
+
+model ShopItem {
+  id           String   @id @default(cuid())
+  guildId      String
+  roleId       String
+  name         String
+  description  String?
+  price        Int
+  durationHours Int     @default(0)
+  maxStock     Int      @default(-1)
+  currentStock Int      @default(-1)
+  isActive     Boolean  @default(true)
+  configId     String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  config       EconomyConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  purchases    ShopPurchase[]
+
+  @@unique([guildId, roleId])
+  @@index([guildId])
+  @@map("shop_items")
+}
+
+model ShopPurchase {
+  id        String    @id @default(cuid())
+  guildId   String
+  userId    String
+  itemId    String
+  price     Int
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  item      ShopItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId])
+  @@index([expiresAt])
+  @@map("shop_purchases")
+}
+
+// --- RegBattle ---
+
+model RegbattleConfig {
+  id                   String   @id @default(cuid())
+  guildId              String   @unique
+  masterChannelId      String?
+  categoryId           String?
+  announceChannelId    String?
+  reserveChannelId     String?
+  pingRoleId           String?
+  inSquadRoleId        String?
+  commanderRoleIds     String[] @default([])
+  muteRoleIds          String[] @default([])
+  squadSize            Int      @default(8)
+  airSize              Int      @default(4)
+  pingEscalateAfter    Int      @default(6)
+  playedMinMinutes     Int      @default(15)
+  playedResetHour      Int      @default(23)
+  playedTodayRoleId    String?
+  reprimandAnnulRoleIds  String[] @default([])
+  reprimandChannelId    String?
+  reprimandTypeRoleIds  String[] @default([])
+  reprimandDurationDays Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  squads               RegbattleSquad[]
+
+  @@map("regbattle_configs")
+}
+
+model RegbattleSquad {
+  id              String   @id @default(cuid())
+  guildId         String
+  number          Int
+  voiceChannelId  String   @unique
+  airChannelId    String?
+  panelMessageId  String?
+  ownerId         String
+  createdAt       DateTime @default(now())
+  configId        String
+
+  config          RegbattleConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+  @@map("regbattle_squads")
+}
+
+// --- Reprimands ---
+
+model Reprimand {
+  id                    String    @id @default(cuid())
+  guildId               String
+  offenderId            String
+  issuerId              String
+  typeRoleId            String
+  reason                String
+  status                String    @default("active")
+  messageId             String?
+  channelId             String?
+  appealCategoryId      String?
+  appealTextId          String?
+  appealVoiceId         String?
+  annulledById          String?
+  annulledAt            DateTime?
+  expiresAt             DateTime?
+  nextAppealAt          DateTime?
+  appealDecision        String?
+  appealDecisionById    String?
+  appealDecisionReason  String?
+  appealDecisionAt      DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([guildId])
+  @@index([offenderId])
+  @@index([expiresAt])
+  @@map("reprimands")
+}
+
+// --- TempVoice ---
+
+model TempvoiceGenerator {
+  id                  String   @id @default(cuid())
+  guildId             String
+  channelId           String   @unique
+  categoryId          String
+  interfaceId         String?
+  defaultName         String   @default("{nickname}")
+  defaultLimit        Int      @default(0)
+  defaultBitrate      Int      @default(64000)
+  defaultRegion       String   @default("auto")
+  initialState        String   @default("unlocked")
+  maxChannelsPerUser  Int      @default(1)
+  maxUserLimit        Int      @default(99)
+  minUserLimit        Int      @default(0)
+  maxBitrate          Int      @default(96000)
+  minBitrate          Int      @default(8000)
+  boosterPerks        Boolean  @default(true)
+  immuneRoleIds       String[] @default([])
+  rewardAnnounceChId  String?
+  rewardRoleId        String?
+  rewardThresholdMin  Int      @default(3000)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  channels            TempvoiceChannel[]
+
+  @@index([guildId])
+  @@map("tempvoice_generators")
+}
+
+model TempvoiceChannel {
+  id             String    @id @default(cuid())
+  guildId        String
+  ownerId        String
+  generatorId    String
+  state          String    @default("unlocked")
+  controlMsgId   String?
+  nameChanges    Int       @default(0)
+  lastNameChange DateTime?
+  createdAt      DateTime  @default(now())
+  lastActivity   DateTime  @default(now())
+
+  generator      TempvoiceGenerator @relation(fields: [generatorId], references: [id], onDelete: Cascade)
+  blocked        TempvoiceBlocked[]
+  trusted        TempvoiceTrusted[]
+
+  @@index([guildId])
+  @@index([ownerId])
+  @@map("tempvoice_channels")
+}
+
+model TempvoiceBlocked {
+  id        String @id @default(cuid())
+  channelId String
+  userId    String
+
+  channel   TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@map("tempvoice_blocked")
+}
+
+model TempvoiceTrusted {
+  id        String @id @default(cuid())
+  channelId String
+  userId    String
+
+  channel   TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+  @@map("tempvoice_trusted")
+}
+
+model TempvoiceUserSettings {
+  id                String   @id @default(cuid())
+  userId            String
+  guildId           String
+  savedName         String?
+  savedLimit        Int?
+  savedBitrate      Int?
+  savedRegion       String?
+  rewardGranted     Boolean  @default(false)
+  totalVoiceMinutes Int      @default(0)
+
+  @@unique([userId, guildId])
+  @@map("tempvoice_user_settings")
+}
+
+// --- Vacation ---
+
+model VacationConfig {
+  id               String   @id @default(cuid())
+  guildId          String   @unique
+  panelChannelId   String?
+  panelMessageId   String?
+  reviewChannelId  String?
+  logChannelId     String?
+  vacationRoleId   String?
+  removeRoleIds    String[] @default([])
+  reviewerRoleIds  String[] @default([])
+  pingRoleIds      String[] @default([])
+  maxDurationDays  Int      @default(30)
+  quickDurationH   Int      @default(12)
+  primeTimeStart   Int      @default(17)
+  primeTimeEnd     Int      @default(1)
+  primeTimeBuffer  Int      @default(1)
+  imageUrl         String?
+  cooldownDays     Int      @default(7)
+  maxPerMonth      Int      @default(3)
+  maxQuickPerWeek  Int      @default(2)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  requests         VacationRequest[]
+
+  @@map("vacation_configs")
+}
+
+model VacationRequest {
+  id              String    @id @default(cuid())
+  guildId         String
+  userId          String
+  type            String    @default("regular")
+  reason          String
+  durationMinutes Int
+  status          String    @default("pending")
+  reviewerId      String?
+  reviewMessageId String?
+  savedRoleIds    String[]  @default([])
+  startDate       DateTime?
+  endDate         DateTime?
+  reminderSent    Boolean   @default(false)
+  configId        String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  config          VacationConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId])
+  @@index([status])
+  @@map("vacation_requests")
 }
