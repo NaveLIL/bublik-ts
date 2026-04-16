@@ -109,6 +109,13 @@ model EconomyConfig {
   // Shop
   shopEnabled       Boolean  @default(true)
 
+  // Auto-leaderboard
+  leaderboardChannelId  String?
+  leaderboardMessageId  String?
+
+  // Welcome bonus (0 = disabled)
+  welcomeBonus      Int      @default(0)
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
