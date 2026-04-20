@@ -457,3 +457,160 @@ model NsVacation {
   @@index([status, endDate])
   @@map("ns_vacations")
 }
+
+// --- Teams (PB Team System) ---
+
+model TeamConfig {
+  id                  String   @id @default(cuid())
+  guildId             String   @unique
+  applicationChannelId String? // Канал для заявок на создание команды
+  reportChannelId     String?  // Канал для отчётов после сессий
+  pollChannelId       String?  // Канал для опросов/сборов
+  leaderboardChannelId String? // Канал для лидерборда
+  leaderboardMessageId String? // ID сообщения лидерборда (авто-обновление)
+  approverRoleIds     String[] @default([]) // Роли, одобряющие заявки
+  baseRoleId          String?  // Базовая роль (кто может создавать/вступать)
+  minSize             Int      @default(10)  // Минимальный размер команды
+  inviteTimeoutH      Int      @default(24)  // Таймаут инвайта (часы)
+  formationDays       Int      @default(7)   // Дней на формирование команды
+  disbandGraceDays    Int      @default(30)  // Дней до расформирования при < minSize
+  pollAutoHoursBefore Int      @default(2)   // За сколько часов до прайма авто-опрос
+  reportTimeoutH      Int      @default(3)   // Таймаут на заполнение отчёта (часы)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  teams               Team[]
+
+  @@map("team_configs")
+}
+
+model Team {
+  id               String    @id @default(cuid())
+  guildId          String
+  name             String
+  roleId           String    @unique // Discord роль команды
+  leaderId         String    // Лидер команды
+  status           String    @default("forming") // forming | active | disbanding | disbanded
+  disbandWarningAt DateTime? // Дата начала предупреждения о расформировании
+  configId         String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  config           TeamConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  members          TeamMember[]
+  invites          TeamInvite[]
+  applications     TeamApplication[]
+  sessions         TeamSession[]
+  seasonStats      TeamSeason[]
+  polls            TeamPoll[]
+
+  @@unique([guildId, name])
+  @@index([guildId])
+  @@index([leaderId])
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String
+  userId   String   @unique // Один человек — одна команда
+  joinedAt DateTime @default(now())
+
+  team     Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@map("team_members")
+}
+
+model TeamInvite {
+  id        String   @id @default(cuid())
+  teamId    String
+  userId    String
+  status    String   @default("pending") // pending | accepted | declined | expired
+  messageId String?  // ID DM-сообщения с инвайтом
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  team      Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("team_invites")
+}
+
+model TeamApplication {
+  id              String   @id @default(cuid())
+  teamId          String
+  status          String   @default("pending") // pending | approved | rejected
+  messageId       String?  // ID сообщения в канале заявок
+  reviewerId      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  team            Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([status])
+  @@map("team_applications")
+}
+
+model TeamSession {
+  id           String    @id @default(cuid())
+  teamId       String
+  guildId      String
+  squadNumber  Int?      // Номер отряда ПБ
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  reportedById String?   // Кто заполнил отчёт
+  reportedPR   Int?      // Полковой рейтинг за сессию
+  reportedPlace Int?     // Место полка
+  reportedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  team         Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([guildId, startedAt])
+  @@map("team_sessions")
+}
+
+model TeamSeason {
+  id            String @id @default(cuid())
+  teamId        String
+  season        Int    // 1-6 (Янв-Фев, Мар-Апр, ..., Ноя-Дек)
+  year          Int    // 2026, 2027...
+  totalPR       Int    @default(0)
+  totalSessions Int    @default(0)
+  totalPlace    Int    @default(0) // Сумма мест для расчёта среднего
+  bestPlace     Int    @default(300)
+  attendance    Int    @default(0) // Общее число участников за сезон (суммарно по сессиям)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  team          Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, season, year])
+  @@index([year, season])
+  @@map("team_seasons")
+}
+
+model TeamPoll {
+  id          String   @id @default(cuid())
+  teamId      String
+  messageId   String?  // ID сообщения опроса
+  channelId   String?  // Канал, где опрос
+  type        String   @default("manual") // manual | auto
+  scheduledAt DateTime?// Время ПБ (указанное лидером)
+  yesUserIds  String[] @default([])
+  noUserIds   String[] @default([])
+  voteTimes   Json     @default("{}") // { "userId": "18:00", ... } — время готовности каждого
+  status      String   @default("active") // active | closed
+  createdAt   DateTime @default(now())
+
+  team        Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([status])
+  @@map("team_polls")
+}

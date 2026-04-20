@@ -49,6 +49,9 @@
     },
     "tempvoice": {
       "description": "Temporary voice channels with full control panel"
+    },
+    "teams": {
+      "description": "PB team system for regiment battles"
     }
   },
   "commands": {
@@ -76,6 +79,9 @@
       "description": "Change bot language for this server",
       "success": "{flag} Bot language changed to **{language}**!",
       "already_set": "This language is already set."
+    },
+    "team": {
+      "description": "Manage regiment battle teams"
     }
   },
   "errors": {
@@ -1457,5 +1463,21 @@
     "ns_log_start": "🛡️ NS: vacation started",
     "ns_log_end": "🛡️ NS: vacation ended",
     "ns_log_end_early": "🛡️ NS: early return"
+  },
+  "teams": {
+    "select_members_placeholder": "Select team members",
+    "btn_accept": "Accept",
+    "btn_decline": "Decline",
+    "btn_approve": "Approve",
+    "btn_reject": "Reject",
+    "create_select_members": "Select members for your team. A name input will appear after selection.",
+    "error_not_configured": "Team system is not configured. Ask an administrator to run `/team setup`.",
+    "error_already_in_team": "You are already in a team. Leave your current team first.",
+    "error_not_in_team": "You are not in any team.",
+    "error_not_leader": "Only the team leader can perform this action.",
+    "error_user_no_team": "User {user} is not in any team.",
+    "error_admin_only": "This command is only available to administrators.",
+    "setup_no_config": "Team system is not configured yet. Set parameters: `/team setup`.",
+    "setup_updated": "\u2705 Team system configuration updated!"
   }
 }
