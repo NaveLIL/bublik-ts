@@ -106,6 +106,45 @@ model EconomyConfig {
   robMinSteal       Int      @default(100)
   robSuccessRate    Int      @default(45)
 
+  // Heist (банковский налёт)
+  heistEnabled         Boolean @default(true)
+  heistCooldownInit    BigInt  @default(86400000)   // 24ч инициатору
+  heistCooldownMember  BigInt  @default(43200000)   // 12ч участнику
+  heistAssembleMs      Int     @default(300000)     // 5 мин сбор команды
+  heistMinMembers      Int     @default(2)
+  heistMaxMembers      Int     @default(4)
+  heistBaseChance      Int     @default(60)         // 2 чел = 60%
+  heistChancePerMember Int     @default(15)         // +15% за каждого сверх минимума
+  heistSafePenalty     Int     @default(20)         // -20% если у жертвы сейф
+  heistMinPercent      Int     @default(8)          // 8% от банка
+  heistMaxPercent      Int     @default(15)
+  heistFine            Int     @default(1000)       // штраф каждому при провале
+  heistMinVictimBank   Int     @default(2000)
+
+  // Wanted-система
+  wantedEnabled        Boolean @default(true)
+  wantedDecayMs        BigInt  @default(172800000)  // 48ч на одну звезду
+  wantedCaptureMin     Int     @default(3)          // мин. звёзд для capture
+  wantedCaptureChance  Int     @default(70)
+  wantedVictimBonus    Int     @default(50)         // +50% если ловит сама жертва
+  wantedCaptureCooldown BigInt @default(21600000)   // 6ч охотнику
+  wantedCaptureReward  Int     @default(20)         // 20% кошелька цели
+  wantedCaptureFine    Int     @default(750)
+
+  // Грязные деньги
+  dirtyEnabled         Boolean @default(true)
+  dirtyExpireMs        BigInt  @default(86400000)   // 24ч
+  dirtyLaunderTax      Int     @default(30)         // 30% комиссия
+
+  // Сейф / Отмычка (магазин)
+  safeEnabled          Boolean @default(true)
+  safeDurationMs       BigInt  @default(604800000)  // 7 дней
+  safePrice            Int     @default(10000)
+  safeMode             String  @default("partial")  // "partial" (-50% добычи) | "immune"
+  lockpickEnabled      Boolean @default(true)
+  lockpickPrice        Int     @default(3000)
+  lockpickBonus        Int     @default(20)         // +20% к successRate
+
   // Shop
   shopEnabled       Boolean  @default(true)
 
@@ -143,6 +182,24 @@ model EconomyProfile {
   totalEarned     BigInt    @default(0)
   totalSpent      BigInt    @default(0)
   pbVoiceSeconds  Int       @default(0)
+
+  // Heist
+  lastHeistInit   DateTime?
+  lastHeistMember DateTime?
+
+  // Wanted
+  wantedStars     Int       @default(0)
+  wantedNextDecay DateTime?
+  lastCapture     DateTime?
+
+  // Грязные деньги
+  dirtyAmount     Int       @default(0)
+  dirtyClearAt    DateTime?
+
+  // Сейф / Отмычка
+  safeUntil       DateTime?
+  lockpickReady   Boolean   @default(false)
+
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -150,6 +207,7 @@ model EconomyProfile {
 
   @@unique([guildId, userId])
   @@index([guildId])
+  @@index([guildId, wantedStars])
   @@map("economy_profiles")
 }
 
@@ -170,6 +228,42 @@ model EconomyTransaction {
   @@index([guildId, userId])
   @@index([createdAt])
   @@map("economy_transactions")
+}
+
+// --- Heist (банковский налёт) ---
+
+model EconomyHeist {
+  id           String   @id @default(cuid())
+  guildId      String
+  initiatorId  String
+  victimId     String
+  channelId    String
+  messageId    String?
+  status       String   @default("assembling")  // assembling | running | success | fail | cancelled | expired
+  expiresAt    DateTime
+  resolvedAt   DateTime?
+  stolenAmount Int?     // сумма куша при success
+  createdAt    DateTime @default(now())
+
+  members      EconomyHeistMember[]
+
+  @@index([guildId, status])
+  @@index([guildId, initiatorId])
+  @@index([expiresAt])
+  @@map("economy_heists")
+}
+
+model EconomyHeistMember {
+  id        String   @id @default(cuid())
+  heistId   String
+  userId    String
+  joinedAt  DateTime @default(now())
+  payout    Int      @default(0)   // что получил при success / штраф (отрицательно) при fail
+
+  heist     EconomyHeist @relation(fields: [heistId], references: [id], onDelete: Cascade)
+
+  @@unique([heistId, userId])
+  @@map("economy_heist_members")
 }
 
 // --- Shop ---
