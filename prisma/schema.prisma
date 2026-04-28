@@ -402,8 +402,9 @@ model VacationConfig {
   primeTimeEnd     Int      @default(1)
   primeTimeBuffer  Int      @default(1)
   imageUrl         String?
-  cooldownDays     Int      @default(7)
-  maxPerMonth      Int      @default(3)
+  autoDenyHours    Int      @default(8)
+  cooldownDays     Int      @default(3)
+  maxPerMonth      Int      @default(5)
   maxQuickPerWeek  Int      @default(2)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt

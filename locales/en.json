@@ -1424,6 +1424,7 @@
     "config_cooldown": "⏳ **Cooldown:** {days} days",
     "config_max_month": "📊 **Max per 30 days:** {value}",
     "config_max_quick_week": "⚡ **Max quick/7 days:** {value}",
+    "config_auto_deny": "⏱️ **Auto-deny:** {hours}h",
     "list_empty": "📋 No active or pending vacations.",
     "list_header": "📋 **Vacations** ({count})",
     "list_active_title": "**🏖️ Active vacations:**",
@@ -1433,8 +1434,9 @@
     "antiabuse_cooldown": "⏳ **Post-vacation cooldown:** {days} days",
     "antiabuse_max_month": "📊 **Max vacations per 30 days:** {value}",
     "antiabuse_max_quick": "⚡ **Max quick leaves per 7 days:** {value}",
+    "antiabuse_auto_deny": "⏱️ **Auto-deny after:** {hours}h (if no reviewer response)",
     "antiabuse_no_limit": "∞ (no limit)",
-    "antiabuse_hint": "Specify parameters to change:\n`/vacation antiabuse cooldown:7 max_per_month:3 max_quick_per_week:2`",
+    "antiabuse_hint": "Specify parameters to change:\n`/vacation antiabuse cooldown:3 max_per_month:5 max_quick_per_week:2 auto_deny_hours:8`",
     "antiabuse_updated_title": "🛡️ **Anti-abuse updated:**",
 
     "ns_btn_main": "Celestial Guards",

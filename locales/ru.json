@@ -1424,6 +1424,7 @@
     "config_cooldown": "⏳ **Кулдаун:** {days} дн.",
     "config_max_month": "📊 **Макс. за 30 дн.:** {value}",
     "config_max_quick_week": "⚡ **Макс. быстрых/7 дн.:** {value}",
+    "config_auto_deny": "⏱️ **Автоотклонение:** {hours}ч",
     "list_empty": "📋 Нет активных или ожидающих отпусков.",
     "list_header": "📋 **Отпуска** ({count})",
     "list_active_title": "**🏖️ Активные отпуска:**",
@@ -1433,8 +1434,9 @@
     "antiabuse_cooldown": "⏳ **Кулдаун после отпуска:** {days} дн.",
     "antiabuse_max_month": "📊 **Макс. отпусков за 30 дн.:** {value}",
     "antiabuse_max_quick": "⚡ **Макс. быстрых за 7 дн.:** {value}",
+    "antiabuse_auto_deny": "⏱️ **Автоотклонение заявки через:** {hours}ч (если без ответа)",
     "antiabuse_no_limit": "∞ (без лимита)",
-    "antiabuse_hint": "Укажите параметры для изменения:\n`/vacation antiabuse cooldown:7 max_per_month:3 max_quick_per_week:2`",
+    "antiabuse_hint": "Укажите параметры для изменения:\n`/vacation antiabuse cooldown:3 max_per_month:5 max_quick_per_week:2 auto_deny_hours:8`",
     "antiabuse_updated_title": "🛡️ **Антиабьюз обновлён:**",
 
     "ns_btn_main": "Небесные стражи",
