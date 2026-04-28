@@ -52,6 +52,9 @@
     },
     "teams": {
       "description": "PB team system for regiment battles"
+    },
+    "br": {
+      "description": "War Thunder tech reference by Battle Rating"
     }
   },
   "commands": {
@@ -1194,6 +1197,56 @@
       },
       "admin_only": "This command is available to administrators only."
     }
+  },
+  "br": {
+    "cmd_description": "War Thunder tech reference by BR",
+    "cat_all": "All categories",
+    "cat_tanks": "Tanks",
+    "cat_planes": "Planes",
+    "cat_helis": "Helicopters",
+    "cat_spaa": "SPAA",
+    "pri_high": "High priority",
+    "pri_normal": "Normal",
+    "pri_low": "Last resort",
+    "embed_title": "BR {br}",
+    "embed_total": "Total entries: **{count}**",
+    "embed_empty": "Nothing added at this BR yet.",
+    "search_title": "🔍 Search: “{query}”",
+    "search_empty": "Nothing found. Try a different query.",
+    "search_empty_query": "Empty query. Enter at least 2 characters.",
+    "search_footer": "Found: {count}",
+    "panel_title": "🎯 War Thunder tech reference",
+    "panel_description": "Press **Open BR** to view tech priorities, or **Search** to look up a specific unit.",
+    "panel_default_br": "Default BR is **{br}**",
+    "panel_deployed": "✅ BR panel deployed in {channel}",
+    "panel_failed": "❌ Failed to send the panel. Check bot permissions in the channel.",
+    "btn_open": "Open BR",
+    "btn_search": "Search",
+    "btn_add": "Add",
+    "btn_remove": "Remove",
+    "btn_bulk": "Bulk edit",
+    "select_br": "Select BR…",
+    "select_cat": "Filter by category…",
+    "select_admin_cat": "Pick a category…",
+    "select_admin_pri": "Pick a priority…",
+    "select_to_remove": "Select tech to remove…",
+    "modal_add_title": "Add tech",
+    "modal_add_label": "Names (comma- or newline-separated)",
+    "modal_bulk_title": "Full category edit",
+    "modal_bulk_label": "Format: [Priority] on its own line, names below",
+    "modal_search_title": "Search tech",
+    "modal_search_label": "Part of the name",
+    "admin_pick_cat": "BR **{br}** — pick a category to edit:",
+    "admin_pick_pri": "BR **{br}** · {category} — pick a priority:",
+    "admin_pick_items": "BR **{br}** · {category} · {priority} — mark items to remove:",
+    "admin_added": "✅ Added **{count}** to BR **{br}** ({category}, {priority}):",
+    "admin_removed": "🗑️ Removed **{count}** from BR **{br}** ({category})",
+    "admin_bulk_done": "📝 Category **{category}** at BR **{br}** has been rewritten. Entries: **{count}**",
+    "add_empty": "Names list is empty. Enter at least one name.",
+    "no_admin": "You don’t have permission for this action (Manage Server required).",
+    "no_data_yet": "No BRs in the reference yet. Add them via `/br panel`.",
+    "unknown_br": "BR **{br}** is not in this server’s reference.",
+    "error_internal": "Internal error. Try again later."
   },
   "vacation": {
     "panel_title": "🏖️ Vacation Management System",

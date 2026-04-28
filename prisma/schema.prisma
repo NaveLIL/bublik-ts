@@ -460,6 +460,35 @@ model NsVacation {
   @@map("ns_vacations")
 }
 
+// --- BR (Боевые рейтинги) ---
+
+model BrTechEntry {
+  id        Int      @id @default(autoincrement())
+  guildId   String
+  br        String   // "4.0", "10.3"
+  category  String   // tanks | planes | helis | spaa
+  priority  String   // high | normal | low
+  name      String
+  createdAt DateTime @default(now())
+
+  @@index([guildId, br])
+  @@index([guildId, br, category])
+  @@index([guildId, name])
+  @@map("br_tech_entries")
+}
+
+model BrPanel {
+  id              String   @id @default(cuid())
+  guildId         String   @unique
+  panelChannelId  String?
+  panelMessageId  String?
+  defaultBr       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("br_panels")
+}
+
 // --- Teams (PB Team System) ---
 
 model TeamConfig {
