@@ -6,11 +6,11 @@
 
 ## 📋 Этапы
 
-### Этап 1 — Фундамент БД и магазин защиты
-- [ ] Prisma: `EconomyHeist`, `EconomyHeistMember`, `EconomyWantedEntry`, `EconomySafe` (или поля в `EconomyProfile`: `wantedStars`, `wantedExpiresAt`, `safeUntil`, `dirtyAmount`, `dirtyClearAt`)
-- [ ] Конфиг: `EconomyConfig` — добавить блок `heist*`, `wanted*`, `dirty*`, `safe*` с дефолтами
-- [ ] Миграция через `prisma db push`
-- [ ] Магазин: предметы `safe` (7д иммунитет / -50% добычи), `lockpick` (+20% к /rob, расходник)
+### Этап 1 — Фундамент БД и магазин защиты ✅
+- [x] Prisma: `EconomyHeist`, `EconomyHeistMember`, поля в `EconomyProfile` (`wantedStars`, `wantedExpiresAt`, `safeUntil`, `dirtyAmount`, `dirtyClearAt`, `lockpickReady`)
+- [x] Конфиг: `EconomyConfig` — блоки `heist*`, `wanted*`, `dirty*`, `safe*` с дефолтами
+- [x] Миграция через `prisma db push` (в `entrypoint.sh` при старте контейнера)
+- [x] Магазин: предметы `safe` (иммунитет/-50% добычи), `lockpick` (+бонус к /rob, расходник)
 
 ### Этап 2 — `/heist` (налёт на банк) ✅
 - [x] Команда `/heist target:@user` — инициирует налёт
@@ -33,11 +33,11 @@
 - [x] `/wanted top` — публичная доска розыска (топ-10 со звёздами)
 - [x] `/wanted me` — посмотреть свой статус + время до следующего decay
 
-### Этап 4 — «Сейф» и «Отмычка» (магазин)
-- [ ] `safe`: цена ~10000, длительность 7 дней, эффект — `safeUntil` в профиле, при попытке /rob или /heist либо иммунитет, либо -50% добычи (выбрать дизайн)
-- [ ] `lockpick`: цена ~3000, расходник, +20% к successRate следующего `/rob`, флаг в профиле `lockpickReady`
-- [ ] Интеграция с существующим `/shop` — добавить категорию «Криминал»
-- [ ] Логика расхода в самом `/rob` и проверка safe в `/rob` + `/heist`
+### Этап 4 — «Сейф» и «Отмычка» (магазин) ✅
+- [x] `safe`: конфигируемые цена/длительность, `safeUntil` в профиле, режимы `immune`/`partial` (пер гильдии)
+- [x] `lockpick`: расходник, +bonus% к successRate следующего `/rob`, `lockpickReady` в профиле, атомарный `consumeLockpick`
+- [x] Подкоманды `/shop safe` и `/shop lockpick`
+- [x] Логика расхода в `/rob` и проверка safe в `/rob` + `/heist`
 
 ### Этап 5 — «Грязные деньги» ✅
 - [x] Поле `dirtyAmount` + `dirtyClearAt` в профиле
@@ -51,12 +51,12 @@
 - [x] **30+ ключей в локалях** `economy.cmd.dirty.*` / `economy.cmd.launder.*` / `economy.news.*`
 - [x] Отдельный флавор `news_big_steal` при куше ≥ 10 000
 
-### Этап 7 — Сборка и деплой
-- [ ] `tsc` чисто
-- [ ] `npm run build:protected`
-- [ ] commit + push
-- [ ] SSH deploy + `prisma db push`
-- [ ] Проверка в живой гильдии
+### Этап 7 — Сборка и деплой ✅
+- [x] `tsc` чисто
+- [x] `npm run build:protected`
+- [x] commit + push
+- [x] SSH deploy + `prisma db push` (автоматически в `entrypoint.sh`)
+- [x] Проверка в живой гильдии
 
 ---
 

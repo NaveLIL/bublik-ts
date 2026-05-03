@@ -341,7 +341,15 @@
         "market_price_range": "Price range",
         "market_updated": "Marketplace settings updated",
         "market_current": "Current marketplace settings",
-        "market_error_price_range": "Minimum price must be lower than maximum."
+        "market_error_price_range": "Minimum price must be lower than maximum.",
+        "event_status": "Event status",
+        "event_name": "Name",
+        "event_ends_at": "Ends",
+        "event_muls": "Multipliers",
+        "event_weekend": "Weekend booster",
+        "event_set": "Seasonal event updated",
+        "event_cleared": "Seasonal event cleared",
+        "event_current": "Current seasonal event"
       },
       "leaderboard": {
         "description": "Top richest server members",

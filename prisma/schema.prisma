@@ -157,6 +157,18 @@ model EconomyConfig {
   marketMaxPrice        Int     @default(500000)
   marketMinPrice        Int     @default(1000)
 
+  // Сезонные эвенты / временные бусты
+  // Все множители в "процентах от 100": 100 = x1.0, 150 = x1.5, 200 = x2.0
+  eventName            String  @default("")        // имя текущего эвента ("" = нет)
+  eventEndsAt          DateTime?                   // null = бесконечный, иначе авто-выкл
+  eventEarnMul         Int     @default(100)       // /work /crime /daily /weekly /beg
+  eventRobMul          Int     @default(100)       // /rob /heist добыча
+  eventWantedMul       Int     @default(100)       // звёзд получается × N (200 = double stars)
+  // Weekend-буст (sat-sun по UTC) — независимо от eventName
+  eventWeekendEnabled  Boolean @default(false)
+  eventWeekendEarnMul  Int     @default(150)
+  eventWeekendRobMul   Int     @default(150)
+
   // Auto-leaderboard
   leaderboardChannelId  String?
   leaderboardMessageId  String?

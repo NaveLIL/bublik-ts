@@ -341,7 +341,15 @@
         "market_price_range": "Диапазон цен",
         "market_updated": "Параметры маркетплейса обновлены",
         "market_current": "Текущие параметры маркетплейса",
-        "market_error_price_range": "Минимальная цена должна быть меньше максимальной."
+        "market_error_price_range": "Минимальная цена должна быть меньше максимальной.",
+        "event_status": "Статус эвента",
+        "event_name": "Название",
+        "event_ends_at": "Истекает",
+        "event_muls": "Множители",
+        "event_weekend": "Выходной-бустер",
+        "event_set": "Сезонный эвент обновлён",
+        "event_cleared": "Сезонный эвент сброшен",
+        "event_current": "Текущий сезонный эвент"
       },
       "leaderboard": {
         "description": "Топ богатейших участников сервера",
