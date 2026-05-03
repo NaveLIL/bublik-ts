@@ -332,7 +332,16 @@
         "roles_title": "PB-роли экономики:",
         "roles_not_set": "*не задана*",
         "roles_hint": "Укажите роли в опциях tier1-tier5 для настройки.",
-        "roles_updated": "PB-роли обновлены!"
+        "roles_updated": "PB-роли обновлены!",
+        "market_status": "Статус",
+        "market_channel": "Канал модерации",
+        "market_fee": "Взнос за заявку",
+        "market_commission": "Комиссия продавцу",
+        "market_max_per_user": "Лимит ролей на игрока",
+        "market_price_range": "Диапазон цен",
+        "market_updated": "Параметры маркетплейса обновлены",
+        "market_current": "Текущие параметры маркетплейса",
+        "market_error_price_range": "Минимальная цена должна быть меньше максимальной."
       },
       "leaderboard": {
         "description": "Топ богатейших участников сервера",

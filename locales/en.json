@@ -332,7 +332,16 @@
         "roles_title": "Economy PB roles:",
         "roles_not_set": "*not set*",
         "roles_hint": "Specify roles in tier1–tier5 options to configure.",
-        "roles_updated": "PB roles updated!"
+        "roles_updated": "PB roles updated!",
+        "market_status": "Status",
+        "market_channel": "Moderation channel",
+        "market_fee": "Submission fee",
+        "market_commission": "Seller commission",
+        "market_max_per_user": "Per-player role limit",
+        "market_price_range": "Price range",
+        "market_updated": "Marketplace settings updated",
+        "market_current": "Current marketplace settings",
+        "market_error_price_range": "Minimum price must be lower than maximum."
       },
       "leaderboard": {
         "description": "Top richest server members",
