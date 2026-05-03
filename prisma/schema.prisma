@@ -148,6 +148,15 @@ model EconomyConfig {
   // Shop
   shopEnabled       Boolean  @default(true)
 
+  // Player marketplace (роли от игроков)
+  marketEnabled         Boolean @default(true)
+  marketSubmitFee       Int     @default(5000)   // взнос за заявку (возвращается при отказе)
+  marketCommissionPct   Int     @default(80)     // % продавцу (остаток уходит в "никуда")
+  marketModChannelId    String?                  // канал для уведомлений модераторов
+  marketMaxPerUser      Int     @default(3)      // макс. активных ролей у одного продавца
+  marketMaxPrice        Int     @default(500000)
+  marketMinPrice        Int     @default(1000)
+
   // Auto-leaderboard
   leaderboardChannelId  String?
   leaderboardMessageId  String?
@@ -280,6 +289,14 @@ model ShopItem {
   currentStock Int      @default(-1)
   isActive     Boolean  @default(true)
   configId     String
+
+  // Перки роли (бонусы для криминальной системы)
+  perks        Json?    // { robBonus, robDefense, dirtyMul, wantedDecayMul, captureBonus, cooldownMul, crimeBonus }
+
+  // Маркетплейс игроков
+  sellerId         String?  // если задан — это роль от игрока, идёт комиссия
+  commissionPct    Int      @default(0)  // % продавцу
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -288,7 +305,35 @@ model ShopItem {
 
   @@unique([guildId, roleId])
   @@index([guildId])
+  @@index([sellerId])
   @@map("shop_items")
+}
+
+// --- Player marketplace ---
+// Заявка от игрока на добавление роли в магазин. Требует одобрения админа.
+model ShopRoleRequest {
+  id            String   @id @default(cuid())
+  guildId       String
+  sellerId      String
+  name          String
+  description   String?
+  proposedPrice Int
+  durationHours Int      @default(0)
+  perks         Json?
+  status        String   @default("pending")  // pending | approved | rejected | cancelled
+  reviewerId    String?
+  reviewNote    String?
+  feePaid       Int      @default(0)
+  commissionPct Int      @default(80)
+  createdRoleId String?
+  itemId        String?  // привязка к созданному ShopItem
+  modMessageId  String?  // сообщение в канале модерации (для редактирования)
+  createdAt     DateTime @default(now())
+  reviewedAt    DateTime?
+
+  @@index([guildId, status])
+  @@index([sellerId])
+  @@map("shop_role_requests")
 }
 
 model ShopPurchase {
