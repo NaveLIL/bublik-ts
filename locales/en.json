@@ -67,6 +67,11 @@
       "roundtrip": "Roundtrip",
       "websocket": "WebSocket"
     },
+    "help": {
+      "description": "Reference for all bot commands",
+      "select_placeholder": "Pick a command category…",
+      "footer": "Menu is active for 5 minutes • Run /help again if it closes"
+    },
     "reload": {
       "description": "Reload a module without restarting",
       "success": "✅ Module **{module}** reloaded in **{time}ms**",
@@ -291,7 +296,8 @@
       "crime": {
         "description": "Commit a crime (risk losing shekels!)",
         "cooldown_name": "Crime",
-        "error_default": "Execution error."
+        "error_default": "Execution error.",
+        "wanted_added": "Someone snitched to the cops! +1 wanted star."
       },
       "beg": {
         "description": "Beg for alms",
@@ -410,6 +416,8 @@
         "embed_fail": "You were caught trying to rob <@{victim}>!",
         "embed_fail_fine": "**Fine:** {amount}",
         "embed_fail_detail": "The Israel Police never sleeps!",
+        "embed_wanted_added": "Police put you on the wanted list (+1 star)!",
+        "embed_fail_wanted": "Witnesses memorised your face — +1 wanted star.",
         "tx_success": "Robbed <@{target}>",
         "tx_victim": "Robbed by <@{robber}>",
         "tx_fine": "Caught robbing <@{target}>",
@@ -536,6 +544,7 @@
         "error_no_money": "Not enough shekels. Required: {price}.",
         "error_purchase_default": "Purchase error.",
         "error_role_add_fail": "Failed to assign role. Shekels refunded.",
+        "error_role_missing": "Role for item **{name}** was deleted from the server. Item deactivated, shekels refunded. Tell an admin!",
         "error_admin_only": "Only administrators can add items.",
         "error_admin_only_short": "Administrators only.",
         "error_duplicate_role": "This role is already in the shop.",
