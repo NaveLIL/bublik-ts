@@ -342,6 +342,11 @@
         "market_updated": "Параметры маркетплейса обновлены",
         "market_current": "Текущие параметры маркетплейса",
         "market_error_price_range": "Минимальная цена должна быть меньше максимальной.",
+    "pbchannels_title": "🎙️ ПБ-каналы для тир-ролей",
+    "pbchannels_none": "ПБ-каналы не настроены.",
+    "pbchannels_hint": "Используйте `/economy pbchannels add:` / `remove:` для настройки.",
+    "pbchannels_exists": "Этот канал уже в списке ПБ-каналов.",
+    "pbchannels_updated": "✅ Список ПБ-каналов обновлён:
         "event_status": "Статус эвента",
         "event_name": "Название",
         "event_ends_at": "Истекает",

@@ -98,6 +98,9 @@ model EconomyConfig {
   // PB roles
   pbRoleIds         String[] @default([])
 
+  // PB voice channel IDs (independent from regbattle squads)
+  pbVoiceChannelIds String[] @default([])
+
   // Rob
   robCooldown       BigInt   @default(14400000)
   robEnabled        Boolean  @default(true)
