@@ -101,6 +101,9 @@ model EconomyConfig {
   // PB voice channel IDs (independent from regbattle squads)
   pbVoiceChannelIds String[] @default([])
 
+  // PB category IDs (all voice channels inside are treated as PB)
+  pbVoiceCategoryIds String[] @default([])
+
   // Rob
   robCooldown       BigInt   @default(14400000)
   robEnabled        Boolean  @default(true)
