@@ -800,6 +800,15 @@
       "beg_scenario_6": "A waiter gave you their tips",
       "beg_scenario_7": "Someone left change in the vending machine"
     },
+    "pb_tier": {
+      "promote_title": "PB ACTIVITY PROMOTION!",
+      "promote_desc": "Congratulations! You have spent **{hours} hours** in the regiment battle (PB) voice channels and received the **{role}** role!\n\nNow your passive voice earning multiplier is increased to **x{multiplier}**!",
+      "dm_info_title": "YOUR PB ACTIVITY STATUS",
+      "dm_info_desc": "Hello! Just a reminder that our server features a reward system for activity in regiment battles (PB).\n\n📊 Your current status:\n• Hours in PB voice: **{hours} hrs**\n• Current role: **{role}**\n• Earning multiplier: **x{multiplier}**\n\nThank you for your contribution to the regiment's victories! See you in battle! ⚔️",
+      "dm_info_no_role": "none",
+      "notify_err_no_users": "There are no members with accumulated PB activity on this server.",
+      "notify_success": "Successfully sent {count} DM notifications to active PB participants!"
+    },
     "constants": {
       "currency_name": "shekels",
       "pb_tier_1": "Shalom, Regiment!",
