@@ -254,6 +254,7 @@ model EconomyTransaction {
 
   @@index([guildId, userId])
   @@index([createdAt])
+  @@index([profileId])
   @@map("economy_transactions")
 }
 
@@ -324,6 +325,7 @@ model ShopItem {
   @@unique([guildId, roleId])
   @@index([guildId])
   @@index([sellerId])
+  @@index([configId])
   @@map("shop_items")
 }
 
@@ -367,6 +369,7 @@ model ShopPurchase {
 
   @@index([guildId, userId])
   @@index([expiresAt])
+  @@index([itemId])
   @@map("shop_purchases")
 }
 

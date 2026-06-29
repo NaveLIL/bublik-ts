@@ -451,6 +451,7 @@
       },
       "heist": {
         "description": "Assemble a crew and rob a player's bank",
+        "error_lobby_busy": "The lobby is busy processing requests. Please try again in a second.",
         "error_bot": "Cannot raid a bot's bank.",
         "error_self": "Cannot raid your own bank.",
         "error_disabled": "Heists are disabled on this server.",
