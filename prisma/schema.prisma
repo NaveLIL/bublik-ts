@@ -805,3 +805,64 @@ model TeamPoll {
   @@index([status])
   @@map("team_polls")
 }
+
+model LeftMember {
+  id        String   @id @default(cuid())
+  guildId   String
+  userId    String
+  leftAt    DateTime @default(now())
+
+  @@unique([guildId, userId])
+  @@index([leftAt])
+  @@map("left_members")
+}
+
+model EconomyRaid {
+  id            String   @id @default(cuid())
+  guildId       String
+  status        String   @default("pending") // pending (accumulating) | active (ongoing) | resolved
+  totalPool     Int      @default(0)
+  maxHp         Int      @default(0)
+  currentHp     Int      @default(0)
+  channelId     String?
+  messageId     String?
+  startedAt     DateTime?
+  resolvedAt    DateTime?
+  lastHitUserId String?
+
+  participants  EconomyRaidParticipant[]
+  abandonedAccounts EconomyRaidAbandoned[]
+  createdAt     DateTime @default(now())
+
+  @@index([guildId, status])
+  @@map("economy_raids")
+}
+
+model EconomyRaidParticipant {
+  id        String   @id @default(cuid())
+  raidId    String
+  userId    String
+  damage    Int      @default(0)
+  payout    Int      @default(0)
+  joinedAt  DateTime @default(now())
+
+  raid      EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
+
+  @@unique([raidId, userId])
+  @@index([raidId])
+  @@map("economy_raid_participants")
+}
+
+model EconomyRaidAbandoned {
+  id        String   @id @default(cuid())
+  raidId    String
+  userId    String
+  balance   Int
+
+  raid      EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
+
+  @@unique([raidId, userId])
+  @@index([raidId])
+  @@map("economy_raid_abandoned")
+}
+
