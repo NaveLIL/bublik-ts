@@ -1787,7 +1787,8 @@
     "ns_panel_deployed": "🛡️ Celestial Guards panel deployed.",
     "ns_log_start": "🛡️ NS: vacation started",
     "ns_log_end": "🛡️ NS: vacation ended",
-    "ns_log_end_early": "🛡️ NS: early return"
+    "ns_log_end_early": "🛡️ NS: early return",
+    "ns_disabled": "❌ Celestial Guardians features are disabled on this server."
   },
   "teams": {
     "select_members_placeholder": "Select team members",
