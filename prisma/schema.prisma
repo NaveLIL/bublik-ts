@@ -866,3 +866,11 @@ model EconomyRaidAbandoned {
   @@map("economy_raid_abandoned")
 }
 
+model AllowedGuild {
+  id        String   @id @default(cuid())
+  guildId   String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("allowed_guilds")
+}
+
