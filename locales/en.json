@@ -561,7 +561,8 @@
         "phrase_fail": "{user} tried to nab {robber}, but got slapped and left with nothing.|Trying to catch {robber} turned to embarrassment for {user}. Run faster next time!"
       },
       "dirty": {
-        "deposit_blocked": "The banker glares at your dirty bills with contempt. Wash them first via `/launder`, fraier!|Bank of Israel won't take such notes. Money smells — go launder it via `/launder`!|You've got dirty shekels in your wallet — the bank refuses. First `/launder`, then we talk."
+        "deposit_blocked": "The banker glares at your dirty bills with contempt. Wash them first via `/launder`, fraier!|Bank of Israel won't take such notes. Money smells — go launder it via `/launder`!|You've got dirty shekels in your wallet — the bank refuses. First `/launder`, then we talk.",
+        "pay_blocked": "Hey, haver! You cannot transfer dirty shekels to other players. Launder them first via `/launder`!|Transfer of dirty money is blocked. Be an honest citizen — wash it via `/launder` first.|This money smells of crime, transfer rejected. Use `/launder` first."
       },
       "launder": {
         "description": "Launder dirty shekels (commission!)",

@@ -137,11 +137,12 @@ model EconomyConfig {
   wantedCaptureCooldown BigInt @default(21600000)   // 6ч охотнику
   wantedCaptureReward  Int     @default(20)         // 20% кошелька цели
   wantedCaptureFine    Int     @default(750)
+  policeRoleId         String?                      // Роль полиции для /capture
 
   // Грязные деньги
   dirtyEnabled         Boolean @default(true)
   dirtyExpireMs        BigInt  @default(86400000)   // 24ч
-  dirtyLaunderTax      Int     @default(30)         // 30% комиссия
+  dirtyLaunderTax      Int     @default(15)         // 15% комиссия
 
   // Сейф / Отмычка (магазин)
   safeEnabled          Boolean @default(true)
@@ -224,9 +225,10 @@ model EconomyProfile {
   dirtyAmount     Int       @default(0)
   dirtyClearAt    DateTime?
 
-  // Сейф / Отмычка
+  // Сейф / Отмычка / Маска
   safeUntil       DateTime?
   lockpickReady   Boolean   @default(false)
+  maskReady       Boolean   @default(false)
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
