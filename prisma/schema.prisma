@@ -94,6 +94,7 @@ model EconomyConfig {
   casinoEnabled     Boolean  @default(true)
   casinoMaxBet      Int      @default(50000)
   casinoMinBet      Int      @default(50)
+  slotsJackpot      Int      @default(1000)
 
   // PB roles
   pbRoleIds         String[] @default([])
