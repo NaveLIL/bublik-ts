@@ -230,6 +230,7 @@ model EconomyProfile {
   safeUntil       DateTime?
   lockpickReady   Boolean   @default(false)
   maskReady       Boolean   @default(false)
+  blackMarketSlots Int      @default(3)
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -876,5 +877,62 @@ model AllowedGuild {
   createdAt DateTime @default(now())
 
   @@map("allowed_guilds")
+}
+
+model EconomyInventoryItem {
+  id          String   @id @default(cuid())
+  guildId     String
+  userId      String
+  itemKey     String   // e.g. "lockpick", "mask", "custom_radar"
+  name        String   // Название
+  type        String   // "contraband", "accessory", "custom"
+  quantity    Int      @default(1)
+  description String?  @db.VarChar(255)
+  perks       Json?    // Характеристики предмета (e.g. { "robBonus": 5 })
+  isCustom    Boolean  @default(false)
+  creatorId   String?
+  createdAt   DateTime @default(now())
+
+  @@unique([guildId, userId, itemKey])
+  @@index([guildId, userId])
+  @@map("economy_inventory_items")
+}
+
+model BlackMarketListing {
+  id          String   @id @default(cuid())
+  guildId     String
+  sellerId    String
+  itemKey     String
+  name        String
+  type        String
+  quantity    Int      @default(1)
+  price       Int
+  description String?  @db.VarChar(255)
+  perks       Json?
+  isCustom    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([guildId])
+  @@map("economy_black_market_listings")
+}
+
+model CustomItemRequest {
+  id            String   @id @default(cuid())
+  guildId       String
+  creatorId     String
+  name          String
+  description   String?
+  perks         Json?
+  feePaid       Int
+  status        String   @default("pending") // pending | approved | rejected
+  reviewerId    String?
+  reviewNote    String?
+  modMessageId  String?
+  createdAt     DateTime @default(now())
+  reviewedAt    DateTime?
+
+  @@index([guildId, status])
+  @@index([creatorId])
+  @@map("custom_item_requests")
 }
 
