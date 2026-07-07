@@ -138,6 +138,7 @@ model EconomyConfig {
   wantedCaptureReward  Int     @default(20)         // 20% кошелька цели
   wantedCaptureFine    Int     @default(750)
   policeRoleId         String?                      // Роль полиции для /capture
+  govStaffRoleId       String?                      // Роль сотрудников мэрии для /government
 
   // Грязные деньги
   dirtyEnabled         Boolean @default(true)
