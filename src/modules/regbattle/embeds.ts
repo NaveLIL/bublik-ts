@@ -48,7 +48,7 @@ export function buildControlPanelButtons(
   squadId: string,
   hasAir: boolean,
   locale: string,
-  notifyOff: boolean = false,
+  notificationsEnabled: boolean = true,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -91,8 +91,8 @@ export function buildControlPanelButtons(
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId(`${RB_PREFIX}${RB_SEP}notifytoggle${RB_SEP}${squadId}`)
-      .setLabel(notifyOff ? i18n.t('regbattle.btn_notify_on', locale) : i18n.t('regbattle.btn_notify_off', locale))
-      .setStyle(notifyOff ? ButtonStyle.Success : ButtonStyle.Secondary),
+      .setLabel(notificationsEnabled ? i18n.t('regbattle.btn_notify_on', locale) : i18n.t('regbattle.btn_notify_off', locale))
+      .setStyle(notificationsEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
 
   return [row1, row2, row3, row4];

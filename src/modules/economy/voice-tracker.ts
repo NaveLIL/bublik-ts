@@ -34,6 +34,7 @@ import {
   fetchSafeAutomaticRole,
 } from '../../core/RolePolicy';
 import { withMemberRoleLock } from '../../core/MemberRoleLock';
+import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
 import {
   REDIS_ECO_VOICE,
   VOICE_TICK_INTERVAL_MS,
@@ -2205,7 +2206,7 @@ export async function syncGuildPbTierRoles(
       where: { guildId: guild.id, pbVoiceSeconds: { gt: 0 } },
       select: { userId: true },
     }),
-    guild.members.fetch(),
+    getCompleteGuildMembers(guild),
     guild.roles.fetch(),
   ]);
   const candidateUserIds = collectPbTierSyncUserIds(
@@ -2246,10 +2247,10 @@ export async function syncGuildPbTierRoles(
   );
   if (pendingRetiredRoleIds.length > 0 && failed === 0) {
     try {
-      // A second complete fetch is the retirement commit barrier. The durable
-      // intent stays until every per-member mutation succeeded and Discord no
-      // longer reports a holder of any retired role.
-      const verificationMembers = await guild.members.fetch();
+      // The generation-scoped complete cache is the retirement commit barrier.
+      // Every candidate was force-fetched before mutation and successful role
+      // responses update this cache; a gateway gap invalidates the proof.
+      const verificationMembers = await getCompleteGuildMembers(guild);
       const retired = new Set(pendingRetiredRoleIds);
       const hasRetiredRoleHolder = verificationMembers.some((candidate) =>
         candidate.roles.cache.some((role) => retired.has(role.id)));

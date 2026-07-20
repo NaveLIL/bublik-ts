@@ -7,8 +7,18 @@ import {
 const MAX_CLAIM_TTL_MS = 24 * 60 * 60_000;
 const PER_RECIPIENT_GUARD_MS = 60_000;
 const PREVIEW_TOKEN_RE = /^[0-9a-f]{16}$/;
+const DISCORD_SNOWFLAKE_RE = /^\d{1,20}$/;
+const DM_PING_PREVIEW_VERSION = 2;
+const MAX_DM_PING_PREVIEW_MESSAGE_LENGTH = 1_500;
+
+/** Largest batch whose conservative projected claim still fits in 24 hours. */
+export const MAX_DM_PING_PREVIEW_TARGETS = Math.floor(
+  (MAX_CLAIM_TTL_MS - DM_PING_COOLDOWN_MS) /
+  (DM_SEND_DELAY_MS + PER_RECIPIENT_GUARD_MS),
+);
 
 export interface DmPingCooldownStore {
+  get(key: string): Promise<string | null>;
   set(
     key: string,
     value: string,
@@ -35,8 +45,15 @@ export interface ParsedDmPingCooldown {
   token: string | null;
 }
 
+export interface DmPingPreviewEnvelope {
+  version: typeof DM_PING_PREVIEW_VERSION;
+  nonce: string;
+  message: string;
+  targetIds: string[];
+}
+
 export type DmPingPreviewClaimResult =
-  | { status: 'claimed'; claim: DmPingCooldownClaim; message: string }
+  | { status: 'claimed'; claim: DmPingCooldownClaim; preview: DmPingPreviewEnvelope }
   | { status: 'cooldown' }
   | { status: 'expired' };
 
@@ -46,6 +63,77 @@ export function createDmPingPreviewToken(): string {
 
 export function isDmPingPreviewToken(value: unknown): value is string {
   return typeof value === 'string' && PREVIEW_TOKEN_RE.test(value);
+}
+
+function isDmPingTargetId(value: unknown): value is string {
+  return typeof value === 'string' && DISCORD_SNOWFLAKE_RE.test(value);
+}
+
+/**
+ * Keep the exact recipient snapshot next to the preview text. The nonce is
+ * duplicated inside the value so moving/copying a Redis value to another
+ * preview key cannot authorise a different confirmation button.
+ */
+export function serializeDmPingPreviewEnvelope(
+  nonce: string,
+  message: string,
+  targetIds: readonly string[],
+): string {
+  if (!isDmPingPreviewToken(nonce) || typeof message !== 'string' ||
+      message.length === 0 || message.length > MAX_DM_PING_PREVIEW_MESSAGE_LENGTH ||
+      !Array.isArray(targetIds) || targetIds.length === 0 ||
+      targetIds.length > MAX_DM_PING_PREVIEW_TARGETS) {
+    throw new Error('Invalid DM ping preview envelope');
+  }
+  const uniqueTargetIds = new Set<string>();
+  for (const targetId of targetIds) {
+    if (!isDmPingTargetId(targetId) || uniqueTargetIds.has(targetId)) {
+      throw new Error('Invalid DM ping preview envelope');
+    }
+    uniqueTargetIds.add(targetId);
+  }
+  const envelope: DmPingPreviewEnvelope = {
+    version: DM_PING_PREVIEW_VERSION,
+    nonce,
+    message,
+    targetIds: [...targetIds],
+  };
+  return JSON.stringify(envelope);
+}
+
+/** Legacy plain-message previews deliberately fail closed and expire by TTL. */
+export function parseDmPingPreviewEnvelope(
+  raw: string | null,
+  expectedNonce: string,
+): DmPingPreviewEnvelope | null {
+  if (!raw || !isDmPingPreviewToken(expectedNonce)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const candidate = parsed as Partial<DmPingPreviewEnvelope>;
+  if (candidate.version !== DM_PING_PREVIEW_VERSION ||
+      candidate.nonce !== expectedNonce ||
+      typeof candidate.message !== 'string' || candidate.message.length === 0 ||
+      candidate.message.length > MAX_DM_PING_PREVIEW_MESSAGE_LENGTH ||
+      !Array.isArray(candidate.targetIds) || candidate.targetIds.length === 0 ||
+      candidate.targetIds.length > MAX_DM_PING_PREVIEW_TARGETS) {
+    return null;
+  }
+  const uniqueTargetIds = new Set<string>();
+  for (const targetId of candidate.targetIds) {
+    if (!isDmPingTargetId(targetId) || uniqueTargetIds.has(targetId)) return null;
+    uniqueTargetIds.add(targetId);
+  }
+  return {
+    version: DM_PING_PREVIEW_VERSION,
+    nonce: candidate.nonce,
+    message: candidate.message,
+    targetIds: [...candidate.targetIds],
+  };
 }
 
 export function parseDmPingCooldown(raw: string | null): ParsedDmPingCooldown | null {
@@ -101,16 +189,16 @@ const CONSUME_PREVIEW_SCRIPT = `
 if redis.call('exists', KEYS[1]) == 1 then
   return {0}
 end
-local message = redis.call('get', KEYS[2])
-if not message then
+local preview = redis.call('get', KEYS[2])
+if not preview or preview ~= ARGV[1] then
   return {-1}
 end
-local acquired = redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2], 'NX')
+local acquired = redis.call('set', KEYS[1], ARGV[2], 'PX', ARGV[3], 'NX')
 if not acquired then
   return {0}
 end
 redis.call('del', KEYS[2])
-return {1, message}
+return {1}
 `;
 
 /**
@@ -122,16 +210,29 @@ return {1, message}
 export async function consumeDmPingPreviewAndClaim(
   store: DmPingCooldownStore,
   cooldownKey: string,
-  messageKey: string,
-  targetCount: number,
+  previewKey: string,
+  previewNonce: string,
   now: number = Date.now(),
   token: string = randomUUID(),
 ): Promise<DmPingPreviewClaimResult> {
-  if (!cooldownKey || !messageKey || cooldownKey === messageKey ||
+  if (!cooldownKey || !previewKey || cooldownKey === previewKey ||
+      !isDmPingPreviewToken(previewNonce) ||
       !Number.isSafeInteger(now) || now <= 0 || !token) {
     throw new Error('Invalid DM ping preview claim');
   }
-  const ttlMs = dmPingBatchClaimTtlMs(targetCount);
+
+  // Parse before entering Lua so the claim TTL is derived from the exact
+  // recipient snapshot. Lua compares this raw value before claiming, making
+  // the optimistic read safe against confirm/cancel/replacement races.
+  const rawPreview = await store.get(previewKey);
+  const preview = parseDmPingPreviewEnvelope(rawPreview, previewNonce);
+  if (!rawPreview || !preview) {
+    return await store.get(cooldownKey) === null
+      ? { status: 'expired' }
+      : { status: 'cooldown' };
+  }
+
+  const ttlMs = dmPingBatchClaimTtlMs(preview.targetIds.length);
   const expiresAt = now + ttlMs;
   if (!Number.isSafeInteger(expiresAt)) throw new Error('DM ping cooldown expiry overflow');
   const raw = `${expiresAt}:${token}`;
@@ -139,7 +240,8 @@ export async function consumeDmPingPreviewAndClaim(
     CONSUME_PREVIEW_SCRIPT,
     2,
     cooldownKey,
-    messageKey,
+    previewKey,
+    rawPreview,
     raw,
     String(ttlMs),
   );
@@ -149,13 +251,13 @@ export async function consumeDmPingPreviewAndClaim(
   const status = Number(result[0]);
   if (status === 0) return { status: 'cooldown' };
   if (status === -1) return { status: 'expired' };
-  if (status !== 1 || typeof result[1] !== 'string') {
+  if (status !== 1) {
     throw new Error('Invalid DM ping preview claim response');
   }
   return {
     status: 'claimed',
     claim: { token, raw, expiresAt, ttlMs },
-    message: result[1],
+    preview,
   };
 }
 

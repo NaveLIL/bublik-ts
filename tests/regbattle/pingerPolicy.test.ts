@@ -10,6 +10,7 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
   summarizePingerOccupancy,
@@ -109,6 +110,14 @@ test('released and superseded claims never manufacture a local cooldown', () => 
   assert.equal(shouldAdvancePingerLocalCooldown('ownership-lost'), false);
   assert.equal(shouldAdvancePingerLocalCooldown('retained-without-send'), true);
   assert.equal(shouldAdvancePingerLocalCooldown('sent-or-ambiguous'), true);
+});
+
+test('only an explicit safe abort releases a pinger claim early', () => {
+  assert.equal(selectPingerClaimSettlement(false, false, true), 'release');
+  assert.equal(selectPingerClaimSettlement(false, true, true), 'ownership-lost');
+  assert.equal(selectPingerClaimSettlement(false, false, false), 'finalize');
+  assert.equal(selectPingerClaimSettlement(true, false, true), 'finalize');
+  assert.equal(selectPingerClaimSettlement(true, true, true), 'finalize');
 });
 
 test('a recalculation requested during async work remains pending', () => {

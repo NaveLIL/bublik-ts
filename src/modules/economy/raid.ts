@@ -16,6 +16,7 @@ import { getGuildLocale } from '../../core/GuildConfig';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
 import { isGuildAllowed } from '../../core/Whitelist';
 import { BublikEmbed, successEmbed, errorEmbed } from '../../core/EmbedBuilder';
+import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
 import {
   drainAbandonedBalances,
   getOrCreatePendingRaid,
@@ -571,7 +572,7 @@ export async function syncLeftMembers(client: Client): Promise<void> {
       const config = await getEcoConfig(guild.id);
       if (!config?.enabled) continue;
       // Получаем всех участников сервера (Discord API chunking)
-      const members = await guild.members.fetch();
+      const members = await getCompleteGuildMembers(guild);
       const memberIds = new Set(members.keys());
 
       // Получаем все профили экономики с ненулевым балансом

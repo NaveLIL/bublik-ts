@@ -54,6 +54,10 @@ import {
   isCreationCooldown,
   setCreationCooldown,
 } from './utils';
+import {
+  firstFreeSquadNumber,
+  legacySquadPlaceholderRepair,
+} from './squadNumbering';
 
 import {
   buildControlPanelEmbed,
@@ -69,6 +73,7 @@ import { getRedis } from '../../core/Redis';
 import { i18n } from '../../core/I18n';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
 import { isGuildAllowed } from '../../core/Whitelist';
+import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
 import {
   getDuePlayedResetDate,
   canBypassSquadCreationWindow,
@@ -110,11 +115,7 @@ import {
   pbPingCandidateFromMember,
 } from './pingEligibility';
 import { resolveTeamsVoiceIntegration } from './teamsVoiceResolver';
-import {
-  ensureCompleteIntegrityMemberSnapshot,
-  resolveStableIntegrityLocation,
-  runIsolatedIntegrityTasks,
-} from './integrityPolicy';
+import { resolveStableIntegrityLocation, runIsolatedIntegrityTasks } from './integrityPolicy';
 import {
   assertStatusPanelPipelineSucceeded,
   isOwnedStatusPanelMessageIdentity,
@@ -126,6 +127,11 @@ import {
   statusPanelTrailingRetryDelay,
   statusPanelSquadSnapshot,
 } from './statusPanelPolicy';
+import {
+  areSquadNotificationsEnabled,
+  squadNotifyOffKey,
+  toggleSquadNotifications,
+} from './notifyToggle';
 
 // Teams интеграция (ленивый импорт для избежания циклических зависимостей)
 async function getTeamsVoice(client: BublikClient) {
@@ -154,7 +160,6 @@ const PLAYED_RESET_BOOTSTRAP_SCOPE = 'regbattle_played_reset_bootstrap';
 
 // Serialises duplicate/move voice events for one member. Durable state remains in Redis.
 const memberTransitionQueues = new Map<string, Promise<void>>();
-const integrityCompleteMemberSnapshots = new Set<string>();
 const zeroSquadCleanupCompleted = new Set<string>();
 interface StatusPanelRetryTimer {
   timer: ReturnType<typeof setTimeout>;
@@ -193,7 +198,6 @@ export function clearVoiceSessions(guildId: string): void {
 const STATUS_PANEL_KEY = 'rb:statuspanel'; // rb:statuspanel:{guildId} → v2 { channelId, messageId }
 const STATUS_PANEL_LOCK_KEY = 'rb:statuspanel_lock'; // rb:statuspanel_lock:{guildId} → lock token
 const STATUS_PANEL_INVALID_KEY = 'rb:statuspanel_invalid';
-const NOTIFY_OFF_KEY = 'rb:notify_off';     // rb:notify_off:{squadId} → "1"
 const ABSENT_TRACK_KEY = 'rb:absent';        // rb:absent:{guildId}:{userId} → JSON { acc: ms, onAt: ms|null }
 
 interface StatusPanelReference {
@@ -490,22 +494,12 @@ const STATUS_PANEL_DEDUPE_INTERVAL_MS = 5 * 60_000;
 
 /** Проверить, отключены ли уведомления для отряда */
 export async function isNotifyOff(squadId: string): Promise<boolean> {
-  const val = await getRedis().get(`${NOTIFY_OFF_KEY}:${squadId}`);
-  return val === '1';
+  return !(await areSquadNotificationsEnabled(getRedis(), squadId));
 }
 
-/** Переключить уведомления для отряда */
-export async function toggleNotify(squadId: string): Promise<boolean> {
-  const r = getRedis();
-  const key = `${NOTIFY_OFF_KEY}:${squadId}`;
-  const current = await r.get(key);
-  if (current === '1') {
-    await r.del(key);
-    return false; // notify теперь ON
-  } else {
-    await r.set(key, '1');
-    return true; // notify теперь OFF
-  }
+/** Atomically toggle notifications and return the new positive state. */
+export async function toggleNotifications(squadId: string): Promise<boolean> {
+  return toggleSquadNotifications(getRedis(), squadId);
 }
 
 /**
@@ -659,7 +653,7 @@ export async function refreshStatusPanel(
     // Redis timer instead of treating uncached offline members as stale.
     let members: Collection<string, GuildMember>;
     try {
-      members = verifiedMembers ?? await guild.members.fetch();
+      members = verifiedMembers ?? await getCompleteGuildMembers(guild);
     } catch (error) {
       log.warn(`Status panel ${guild.id} deferred: complete member snapshot unavailable`, {
         error: String(error),
@@ -1310,7 +1304,7 @@ export async function getStatusPanelData(guild: Guild, _client: BublikClient): P
 
   // Detail buttons must use the same complete, fail-closed population as the
   // persistent panel. A partial cache is never presented as authoritative.
-  const members = await guild.members.fetch();
+  const members = await getCompleteGuildMembers(guild);
 
   if (config.pingRoleId) {
     const role = await guild.roles.fetch(config.pingRoleId, { force: true });
@@ -2064,6 +2058,9 @@ async function handleMasterJoin(
       await member.voice.disconnect('У вас уже есть активный отряд').catch(() => null);
       return;
     }
+    const predictedSquadNumber = firstFreeSquadNumber(
+      lockedSquads.map((candidate: any) => candidate.number),
+    );
 
     const masterChannel = await state.guild.channels.fetch(config.masterChannelId);
     assertMasterVoice();
@@ -2084,7 +2081,12 @@ async function handleMasterJoin(
     // Создать голосовой канал
     assertMasterVoice();
     vc = await state.guild.channels.create({
-      name: '⚔️ Создание отряда…',
+      // The Redis create lock and the database allocator use the same first-free
+      // rule. Creating with the predicted final name avoids a Discord
+      // CHANNEL_CREATE/CHANNEL_UPDATE ordering race that can strand the
+      // provisional name in clients. The mismatch branch below remains the
+      // authoritative fallback for an out-of-band database race.
+      name: squadName(predictedSquadNumber),
       type: ChannelType.GuildVoice,
       parent: masterVoice?.parentId || config.categoryId || undefined,
       userLimit: 0, // без лимита (до 99)
@@ -2107,8 +2109,18 @@ async function handleMasterJoin(
     // work. Existing pinger states additionally self-heal from cycle signatures.
     recalculatePinger(guildId);
     assertMasterVoice();
-    await vc.setName(squadName(squad.number), 'RegBattle: атомарно выделен номер отряда');
-    assertMasterVoice();
+    const allocatedSquadName = squadName(squad.number);
+    if (vc.name !== allocatedSquadName) {
+      // Give CHANNEL_CREATE time to reach gateway clients before the rare
+      // corrective rename; otherwise the update may be observed first.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertMasterVoice();
+      vc = await vc.setName(
+        allocatedSquadName,
+        'RegBattle: скорректирован атомарно выделенный номер отряда',
+      );
+      assertMasterVoice();
+    }
 
     // === Teams интеграция: проверить, является ли командир лидером/членом команды ===
     const tv = await getTeamsVoice(client);
@@ -2240,8 +2252,8 @@ async function sendControlPanel(
         !!squad.airChannelId,
         locale,
       );
-      const notifyOffState = await isNotifyOff(squad.id);
-      const buttons = buildControlPanelButtons(squad.id, !!squad.airChannelId, locale, notifyOffState);
+      const notificationsEnabled = !(await isNotifyOff(squad.id));
+      const buttons = buildControlPanelButtons(squad.id, !!squad.airChannelId, locale, notificationsEnabled);
 
       const msg = await vc.send({
         embeds: [embed],
@@ -2282,8 +2294,8 @@ export async function updateControlPanel(squad: any, guild: Guild, _client: Bubl
       !!squad.airChannelId,
       locale,
     );
-    const notifyOffState = await isNotifyOff(squad.id);
-    const buttons = buildControlPanelButtons(squad.id, !!squad.airChannelId, locale, notifyOffState);
+    const notificationsEnabled = !(await isNotifyOff(squad.id));
+    const buttons = buildControlPanelButtons(squad.id, !!squad.airChannelId, locale, notificationsEnabled);
 
     const msg = await vc.messages.fetch(squad.panelMessageId).catch(() => null);
     if (msg) {
@@ -2318,7 +2330,7 @@ export async function teardownSquadIntegration(squad: any, client: BublikClient)
         client,
       );
     }
-    await getRedis().del(`${NOTIFY_OFF_KEY}:${squad.id}`);
+    await getRedis().del(squadNotifyOffKey(squad.id));
     return true;
   } catch (error) {
     log.error('Teams/Redis: ошибка teardown отряда; DB tracker сохранён', {
@@ -2453,6 +2465,27 @@ export async function restoreSquads(
           }
           log.debug(`Cleanup: удалена запись отряда для несуществующего канала ${squad.voiceChannelId}`);
           continue;
+        }
+
+        if (vc.type === ChannelType.GuildVoice) {
+          const repairedName = legacySquadPlaceholderRepair(
+            vc.name,
+            squadName(squad.number),
+          );
+          if (repairedName) {
+            try {
+              await (vc as VoiceChannel).setName(
+                repairedName,
+                'RegBattle: восстановлено legacy-имя отряда',
+              );
+              log.info(`Restore: имя отряда ${squad.id} восстановлено к ${repairedName}`);
+            } catch (error) {
+              // Naming is cosmetic and must not prevent session/role recovery.
+              log.warn(`Restore: legacy-имя отряда ${squad.id} оставлено до следующего восстановления`, {
+                error: String(error),
+              });
+            }
+          }
         }
 
         // Проверить авиа-канал
@@ -2610,7 +2643,6 @@ export function stopRoleIntegrityChecker(): void {
   deleteTimers.clear();
   for (const retry of statusPanelRetryTimers.values()) clearTimeout(retry.timer);
   statusPanelRetryTimers.clear();
-  integrityCompleteMemberSnapshots.clear();
   zeroSquadCleanupCompleted.clear();
 }
 
@@ -2791,11 +2823,7 @@ async function checkRoleIntegrity(client: BublikClient): Promise<void> {
     // Remove only the stale inSquad capability when no valid session exists.
     // Never invent ping/played/team roles while cleaning legacy contamination.
     if (!config.inSquadRoleId) return;
-    await ensureCompleteIntegrityMemberSnapshot(
-      guild.id,
-      integrityCompleteMemberSnapshots,
-      () => guild.members.fetch(),
-    );
+    await getCompleteGuildMembers(guild);
     const inSquadRole = guild.roles.cache.get(config.inSquadRoleId);
     if (!inSquadRole) return;
     for (const [, member] of inSquadRole.members) {
@@ -2940,7 +2968,7 @@ async function checkPlayedReset(client: BublikClient): Promise<void> {
 
       // Role.members is cache-backed. A failed authoritative fetch must not
       // produce a false successful durable claim.
-      await guild.members.fetch();
+      await getCompleteGuildMembers(guild);
       await guild.roles.fetch(config.playedTodayRoleId);
 
       // Собрать ID участников, которые сейчас в ПБ-войсах (их не трогать)

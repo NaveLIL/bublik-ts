@@ -19,6 +19,11 @@ import { getGuildLocale } from '../../core/GuildConfig';
 import { getRedis } from '../../core/Redis';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
 import { getAllowedGuildsList, isGuildAllowed } from '../../core/Whitelist';
+import {
+  assertCompleteGuildMemberSnapshotCurrent,
+  getCompleteGuildMemberSnapshot,
+  getCompleteGuildMembers,
+} from '../../core/GuildMemberSnapshot';
 
 import {
   PINGER_INTERVAL_MS,
@@ -57,6 +62,7 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
   summarizePingerOccupancy,
@@ -431,14 +437,15 @@ async function handleRecruiting(
     ROLE_PING_INTERVAL_MS,
   );
   if (!claim) return;
-  let finalFenceAbort = false;
   let claimOwnershipLost = false;
   let sendAttempted = false;
+  let retrySafeAbort = false;
 
   try {
     // One complete population is shared by the status panel and role-mention
     // policy; Discord's full member request is not issued twice back-to-back.
-    const members = await guild.members.fetch();
+    const memberSnapshot = await getCompleteGuildMemberSnapshot(guild);
+    const members = memberSnapshot.members;
     await refreshStatusPanel(guild, pingerClient!, true, members);
 
     const locale = await getGuildLocale(guild.id);
@@ -456,7 +463,7 @@ async function handleRecruiting(
       state.requestedRevision !== observedRevision ||
       !preliminary.active.some((squad) => squad.count < squad.size)
     ) {
-      finalFenceAbort = true;
+      retrySafeAbort = true;
       return;
     }
 
@@ -467,10 +474,8 @@ async function handleRecruiting(
       return;
     }
 
-    // Discord role mentions are all-or-nothing. Rebuild the complete role
-    // population after claim confirmation, then make the final decision with
-    // no await between that synchronous fence and channel.send invocation.
-    await guild.members.fetch();
+    // Discord role mentions are all-or-nothing. Rebuild every mutable policy
+    // input after claim confirmation.
     const pingRole = pingRoleId
       ? await guild.roles.fetch(pingRoleId, { force: true })
       : null;
@@ -479,15 +484,21 @@ async function handleRecruiting(
       ? await loadPbPingEligibilitySnapshot(guild.id)
       : null;
 
-    // Eligibility is the last await. Refresh gateway occupancy synchronously
-    // afterwards so a late join/full squad aborts before the send call.
+    // Eligibility is the final await. Reassert the exact complete-cache gateway
+    // generation captured above, then keep the occupancy/role/send fence fully
+    // synchronous. A disconnect fails closed instead of silently crossing into
+    // a new generation with stale policy reads.
+    assertCompleteGuildMemberSnapshotCurrent(guild, memberSnapshot.token);
+
+    // Refresh gateway occupancy synchronously so a late join/full squad aborts
+    // before the send call.
     const finalActive = fresh.active.map((squad) => ({
       ...squad,
       count: getSquadMemberCount(guild, squad.voiceChannelId, squad.airChannelId),
     }));
     const freshUnfilled = finalActive.filter((squad) => squad.count < squad.size);
     if (state.requestedRevision !== observedRevision || freshUnfilled.length === 0) {
-      finalFenceAbort = true;
+      retrySafeAbort = true;
       return;
     }
 
@@ -583,23 +594,21 @@ async function handleRecruiting(
   } finally {
     let localOutcome: Parameters<typeof shouldAdvancePingerLocalCooldown>[0];
     let settled = false;
-    if (sendAttempted) {
-      localOutcome = 'sent-or-ambiguous';
+    const settlement = selectPingerClaimSettlement(
+      sendAttempted,
+      claimOwnershipLost,
+      retrySafeAbort,
+    );
+    if (settlement === 'finalize') {
+      localOutcome = sendAttempted ? 'sent-or-ambiguous' : 'retained-without-send';
       settled = await finalizePingerCooldown(redis, claim).catch(() => false);
-    } else if (claimOwnershipLost) {
+    } else if (settlement === 'ownership-lost') {
       localOutcome = 'ownership-lost';
       settled = true;
-    } else if (finalFenceAbort) {
+    } else {
       try {
         settled = await releasePingerCooldown(redis, claim);
         localOutcome = settled ? 'released' : 'ownership-lost';
-      } catch {
-        localOutcome = 'retained-without-send';
-      }
-    } else {
-      try {
-        settled = await finalizePingerCooldown(redis, claim);
-        localOutcome = settled ? 'retained-without-send' : 'ownership-lost';
       } catch {
         localOutcome = 'retained-without-send';
       }
@@ -941,7 +950,7 @@ async function refreshIndividualQueue(
   }
 
   try {
-    await guild.members.fetch();
+    await getCompleteGuildMembers(guild);
     const pbChannelIds = new Set(await getAllPbChannelIds(guild.id));
     if (config.reserveChannelId) pbChannelIds.add(config.reserveChannelId);
     const eligibility = await loadPbPingEligibilitySnapshot(
@@ -998,9 +1007,9 @@ async function handleFull(
     FULL_SUGGEST_INTERVAL_MS,
   );
   if (!claim) return;
-  let finalFenceAbort = false;
   let claimOwnershipLost = false;
   let sendAttempted = false;
+  let retrySafeAbort = false;
 
   // A forced panel refresh belongs to the due FULL action; it must not run on
   // every 10-second pinger tick.
@@ -1024,7 +1033,7 @@ async function handleFull(
       state.requestedRevision !== observedRevision ||
       !summarizePingerOccupancy(finalOccupancy).allFull
     ) {
-      finalFenceAbort = true;
+      retrySafeAbort = true;
       return;
     }
 
@@ -1040,23 +1049,21 @@ async function handleFull(
   } finally {
     let localOutcome: Parameters<typeof shouldAdvancePingerLocalCooldown>[0];
     let settled = false;
-    if (sendAttempted) {
-      localOutcome = 'sent-or-ambiguous';
+    const settlement = selectPingerClaimSettlement(
+      sendAttempted,
+      claimOwnershipLost,
+      retrySafeAbort,
+    );
+    if (settlement === 'finalize') {
+      localOutcome = sendAttempted ? 'sent-or-ambiguous' : 'retained-without-send';
       settled = await finalizePingerCooldown(redis, claim).catch(() => false);
-    } else if (claimOwnershipLost) {
+    } else if (settlement === 'ownership-lost') {
       localOutcome = 'ownership-lost';
       settled = true;
-    } else if (finalFenceAbort) {
+    } else {
       try {
         settled = await releasePingerCooldown(redis, claim);
         localOutcome = settled ? 'released' : 'ownership-lost';
-      } catch {
-        localOutcome = 'retained-without-send';
-      }
-    } else {
-      try {
-        settled = await finalizePingerCooldown(redis, claim);
-        localOutcome = settled ? 'retained-without-send' : 'ownership-lost';
       } catch {
         localOutcome = 'retained-without-send';
       }

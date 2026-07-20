@@ -59,6 +59,23 @@ export type PingerLocalCooldownOutcome =
   | 'released'
   | 'ownership-lost';
 
+export type PingerClaimSettlement = 'finalize' | 'release' | 'ownership-lost';
+
+/**
+ * Release only explicit, harmless final-fence aborts. Unexpected failures before
+ * send retain the normal interval too; otherwise a persistent Discord/DB/config
+ * failure would be retried by every scheduler tick.
+ */
+export function selectPingerClaimSettlement(
+  sendAttempted: boolean,
+  ownershipLost: boolean,
+  retrySafeAbort: boolean,
+): PingerClaimSettlement {
+  if (sendAttempted) return 'finalize';
+  if (ownershipLost) return 'ownership-lost';
+  return retrySafeAbort ? 'release' : 'finalize';
+}
+
 /**
  * A released or superseded distributed claim did not perform this action and
  * must not manufacture a process-local cooldown. Sent/ambiguous work and an

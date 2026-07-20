@@ -959,6 +959,7 @@
     "dmping_no_role_set": "Ping role is not configured.",
     "dmping_role_not_found": "Ping role not found on the server.",
     "dmping_no_targets": "No available fighters with the ping role.",
+    "dmping_too_many_targets": "Broadcast cancelled: **{count}** recipients were found, while the safe limit for one broadcast is **{max}**. Narrow the ping role or split the broadcast.",
     "dmping_embed_title": "🏰 REGIMENT BATTLE ASSEMBLY!",
     "dmping_embed_desc": "**{guild}** — fighters needed!\n\n> 🎖️ **SQUAD {n}** | Commander: {commander}\n> 🔊 Join {channel}\n\nDon't keep the squad waiting!",
     "dmping_report_title": "📩 DM Delivery Report",
@@ -1019,10 +1020,13 @@
     "btn_offline": "Offline",
     "sp_nobody": "Nobody.",
 
-    "btn_notify_on": "Enable notifications",
-    "btn_notify_off": "Disable notifications",
+    "btn_notify_on": "🔔 Notifications: ON",
+    "btn_notify_off": "🔕 Notifications: OFF",
     "notify_toggled_on": "Notifications for your squad are **enabled**.",
     "notify_toggled_off": "Notifications for your squad are **disabled**.",
+    "notify_toggle_failed": "Could not change the notification setting. Please try again.",
+    "notify_sync_delayed": "The setting was saved, but one of the panels will update shortly.",
+    "notify_stale_panel": "This control panel is outdated. Use your squad's current control panel.",
 
     "reprimand_channel_not_set": "Reprimand channel is not configured. Use `/regbattle setup reprimand_channel`.",
     "reprimand_types_not_set": "Reprimand types are not configured. Use `/regbattle addrole type:reprimand_type`.",
