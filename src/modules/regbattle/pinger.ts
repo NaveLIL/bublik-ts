@@ -51,9 +51,11 @@ import {
   loadPbPingEligibilitySnapshot,
   pbPingCandidateFromMember,
 } from './pingEligibility';
+import { buildPbPingerMessage } from './pingerMessages';
 import { isUnknownMemberError } from './safety';
 import {
   buildPingerObservationSignature,
+  canSendPingerFullSuggestion,
   completePingerRevision,
   hasPendingPingerRevision,
   isPingerActionDue,
@@ -62,6 +64,7 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerPopulationPhase,
   selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
@@ -318,9 +321,8 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
     })),
   );
 
-  const { allFull } = summarizePingerOccupancy(squadInfos);
   const { occupiedSlots: activeOccupiedSlots } = summarizePingerOccupancy(activeSquadInfos);
-  const anyUnfilled = activeSquadInfos.some((s) => s.count < s.size);
+  const populationPhase = selectPingerPopulationPhase(activeSquadInfos);
 
   const now = Date.now();
   const phaseAtCycleStart = state.phase;
@@ -350,9 +352,9 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
     hasPendingPingerRevision(observedRevision, state.processedRevision) ||
     state.lastObservationSignature !== observationSignature
   ) {
-    if (allFull) {
+    if (populationPhase === 'full') {
       state.phase = PingPhase.Full;
-    } else if (anyUnfilled) {
+    } else if (populationPhase === 'recruiting') {
       // Проверить, нужна ли эскалация
       const escalateAfter = config.pingEscalateAfter ?? 6;
       const cooledDown = isPbIndividualEscalationReady(now, state.lastEscalationEndedAt) &&
@@ -538,13 +540,10 @@ async function handleRecruiting(
     }
 
     sendAttempted = true;
-    const sendPromise = channel.send({
-      ...(mention ?? {}),
-      embeds: [buildRecruitPingEmbed(finalActive, locale)],
-      allowedMentions: mention?.allowedMentions ?? {
-        parse: [], roles: [], users: [], repliedUser: false,
-      },
-    });
+    const sendPromise = channel.send(buildPbPingerMessage(
+      buildRecruitPingEmbed(finalActive, locale),
+      mention,
+    ));
     const sent = await sendPromise;
 
     // Автоудаление пинг-сообщения
@@ -1014,36 +1013,104 @@ async function handleFull(
   // A forced panel refresh belongs to the due FULL action; it must not run on
   // every 10-second pinger tick.
   try {
-    await refreshStatusPanel(guild, pingerClient!, true);
+    // Share one complete population with the status panel and the role-mention
+    // safety policy. This avoids duplicate Discord member requests.
+    const memberSnapshot = await getCompleteGuildMemberSnapshot(guild);
+    const members = memberSnapshot.members;
+    await refreshStatusPanel(guild, pingerClient!, true, members);
     const locale = await getGuildLocale(guild.id);
     const channel = await guild.client.channels.fetch(config.announceChannelId) as TextChannel;
     if (!channel) return;
+
+    const pingRoleId = typeof config.pingRoleId === 'string' ? config.pingRoleId : null;
+    let mention: ReturnType<typeof buildPbMassRoleMentionPlan> = null;
+
+    const preliminary = await observePingerSquads(guild, config);
+    if (!canSendPingerFullSuggestion(
+      observedRevision,
+      state.requestedRevision,
+      preliminary.active,
+    )) {
+      retrySafeAbort = true;
+      return;
+    }
 
     if (!(await confirmPingerCooldown(redis, claim))) {
       claimOwnershipLost = true;
       return;
     }
 
+    const pingRole = pingRoleId
+      ? await guild.roles.fetch(pingRoleId, { force: true })
+      : null;
     const fresh = await observePingerSquads(guild, config);
-    const finalOccupancy = fresh.all.map((squad) => ({
+    const eligibility = pingRoleId && pingRole
+      ? await loadPbPingEligibilitySnapshot(guild.id)
+      : null;
+
+    // Eligibility is the final await. From this point through channel.send(),
+    // keep the gateway generation, occupancy and role population fence fully
+    // synchronous so a late change fails closed.
+    assertCompleteGuildMemberSnapshotCurrent(guild, memberSnapshot.token);
+
+    const finalOccupancy = fresh.active.map((squad) => ({
       ...squad,
       count: getSquadMemberCount(guild, squad.voiceChannelId, squad.airChannelId),
     }));
-    if (
-      state.requestedRevision !== observedRevision ||
-      !summarizePingerOccupancy(finalOccupancy).allFull
-    ) {
+    if (!canSendPingerFullSuggestion(
+      observedRevision,
+      state.requestedRevision,
+      finalOccupancy,
+    )) {
       retrySafeAbort = true;
       return;
     }
 
+    if (pingRoleId && pingRole && eligibility) {
+      const pbChannelIds = new Set<string>();
+      for (const squad of fresh.all) {
+        pbChannelIds.add(squad.voiceChannelId);
+        if (squad.airChannelId) pbChannelIds.add(squad.airChannelId);
+      }
+      pbChannelIds.add(config.reserveChannelId);
+      const pingRoleMembers = pingRole.members.map(pbPingCandidateFromMember);
+      const unavailablePingRoleState = new Map<string, boolean>();
+      for (const userId of eligibility.excludedUserIds) {
+        unavailablePingRoleState.set(
+          userId,
+          guild.members.cache.get(userId)?.roles.cache.has(pingRoleId) === true,
+        );
+      }
+      mention = buildPbMassRoleMentionPlan(
+        {
+          pingRoleId,
+          playedTodayRoleId: config.playedTodayRoleId ?? null,
+          pbChannelIds,
+        },
+        eligibility,
+        unavailablePingRoleState,
+        pingRoleMembers,
+        pingRole.mentionable || Boolean(
+          guild.members.me &&
+          channel.permissionsFor(guild.members.me)?.has(PermissionFlagsBits.MentionEveryone),
+        ),
+      );
+    }
+
     sendAttempted = true;
-    const sendPromise = channel.send({
-      embeds: [buildFullSuggestEmbed(config.reserveChannelId, locale)],
-    });
+    const sendPromise = channel.send(buildPbPingerMessage(
+      buildFullSuggestEmbed(config.reserveChannelId, locale),
+      mention,
+    ));
     const sent = await sendPromise;
 
     scheduleAutoDelete(sent);
+
+    if (!mention) {
+      log.warn(
+        `Pinger ${guild.id}: FULL reserve suggestion sent without unsafe/unavailable role mention`,
+      );
+    }
   } catch (err) {
     log.error('Ошибка предложения запасных', { error: String(err) });
   } finally {

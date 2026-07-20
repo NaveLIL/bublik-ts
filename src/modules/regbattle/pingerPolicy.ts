@@ -8,6 +8,8 @@ export interface PingerOccupancySummary {
   allFull: boolean;
 }
 
+export type PingerPopulationPhase = 'idle' | 'recruiting' | 'full';
+
 export interface PingerObservedSquad extends PingerSquadOccupancy {
   squadId: string;
   notifyOff: boolean;
@@ -40,6 +42,25 @@ export function summarizePingerOccupancy(
     occupiedSlots: squads.reduce((sum, squad) => sum + Math.min(squad.count, squad.size), 0),
     allFull: squads.length > 0 && squads.every((squad) => squad.count >= squad.size),
   };
+}
+
+/** Notification-disabled squads cannot trigger or block public recruiting. */
+export function selectPingerPopulationPhase(
+  notifyEnabledSquads: readonly PingerSquadOccupancy[],
+): PingerPopulationPhase {
+  if (summarizePingerOccupancy(notifyEnabledSquads).allFull) return 'full';
+  if (notifyEnabledSquads.some((squad) => squad.count < squad.size)) return 'recruiting';
+  return 'idle';
+}
+
+/** Final synchronous gate immediately before a FULL/reserve announcement. */
+export function canSendPingerFullSuggestion(
+  observedRevision: number,
+  requestedRevision: number,
+  notifyEnabledSquads: readonly PingerSquadOccupancy[],
+): boolean {
+  return requestedRevision === observedRevision &&
+    selectPingerPopulationPhase(notifyEnabledSquads) === 'full';
 }
 
 export function selectNotifyEnabledSquads<T extends { squadId: string }>(

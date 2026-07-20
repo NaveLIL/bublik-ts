@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPingerObservationSignature,
+  canSendPingerFullSuggestion,
   completePingerRevision,
   hasPendingPingerRevision,
   isPingerActionDue,
@@ -10,6 +11,7 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerPopulationPhase,
   selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
@@ -97,6 +99,30 @@ test('notify-off occupancy cannot manufacture recruiting progress', () => {
 
   assert.equal(summarizePingerOccupancy(before).occupiedSlots, 2);
   assert.equal(summarizePingerOccupancy(after).occupiedSlots, 2);
+});
+
+test('FULL and IDLE decisions consider only notification-enabled squads', () => {
+  const squads = [
+    { squadId: 'full-active', count: 5, size: 5 },
+    { squadId: 'unfilled-silent', count: 1, size: 5 },
+  ];
+  const active = selectNotifyEnabledSquads(squads, new Set(['unfilled-silent']));
+
+  assert.equal(selectPingerPopulationPhase(active), 'full');
+  assert.equal(
+    selectPingerPopulationPhase(selectNotifyEnabledSquads(squads, new Set(squads.map((s) => s.squadId)))),
+    'idle',
+  );
+  assert.equal(selectPingerPopulationPhase(squads), 'recruiting');
+});
+
+test('FULL reserve send gate rejects a stale revision or late free slot', () => {
+  const full = [{ count: 5, size: 5 }];
+
+  assert.equal(canSendPingerFullSuggestion(7, 7, full), true);
+  assert.equal(canSendPingerFullSuggestion(7, 8, full), false);
+  assert.equal(canSendPingerFullSuggestion(7, 7, [{ count: 4, size: 5 }]), false);
+  assert.equal(canSendPingerFullSuggestion(7, 7, []), false);
 });
 
 test('FULL status refresh is due only at or after the interval boundary', () => {
