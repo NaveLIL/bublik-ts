@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildPbMassRoleMentionPlan,
+  classifyPbIndividualPingEligibility,
   isPbIndividualEscalationReady,
   isPbIndividualPingEligible,
   isPbMassRoleMentionSafe,
@@ -30,6 +31,73 @@ const snapshot: PbPingEligibilitySnapshot = {
   excludedUserIds: new Set(),
   vacationRoleId: 'vacation-role',
 };
+
+test('PB individual eligibility classifier reports the primary policy reason', () => {
+  const cases: Array<{
+    name: string;
+    candidate?: PbPingCandidate;
+    policy?: PbPingPolicy;
+    snapshot?: PbPingEligibilitySnapshot | null;
+    expected: ReturnType<typeof classifyPbIndividualPingEligibility>;
+  }> = [
+    { name: 'eligible', expected: 'eligible' },
+    { name: 'missing snapshot', snapshot: null, expected: 'unavailable_state' },
+    {
+      name: 'cross-guild snapshot',
+      snapshot: { ...snapshot, guildId: 'other' },
+      expected: 'unavailable_state',
+    },
+    {
+      name: 'durable vacation',
+      snapshot: { ...snapshot, excludedUserIds: new Set([candidate.userId]) },
+      expected: 'vacation',
+    },
+    {
+      name: 'vacation role',
+      candidate: { ...candidate, roleIds: new Set(['ping', 'vacation-role']) },
+      expected: 'vacation',
+    },
+    { name: 'bot', candidate: { ...candidate, isBot: true }, expected: 'bot' },
+    {
+      name: 'ping role is not configured',
+      policy: { ...policy, pingRoleId: null },
+      expected: 'ping_role_not_configured',
+    },
+    {
+      name: 'missing ping role',
+      candidate: { ...candidate, roleIds: new Set() },
+      expected: 'missing_ping_role',
+    },
+    {
+      name: 'played today',
+      candidate: { ...candidate, roleIds: new Set(['ping', 'played']) },
+      expected: 'played',
+    },
+    {
+      name: 'already in PB',
+      candidate: { ...candidate, voiceChannelId: 'squad' },
+      expected: 'in_pb',
+    },
+  ];
+
+  for (const entry of cases) {
+    const result = classifyPbIndividualPingEligibility(
+      entry.candidate ?? candidate,
+      entry.policy ?? policy,
+      entry.snapshot === undefined ? snapshot : entry.snapshot,
+    );
+    assert.equal(result, entry.expected, entry.name);
+    assert.equal(
+      isPbIndividualPingEligible(
+        entry.candidate ?? candidate,
+        entry.policy ?? policy,
+        entry.snapshot === undefined ? snapshot : entry.snapshot,
+      ),
+      entry.expected === 'eligible',
+      `${entry.name}: boolean policy delegates to the classifier`,
+    );
+  }
+});
 
 test('PB individual eligibility is fail-closed without a matching DB snapshot', () => {
   assert.equal(isPbIndividualPingEligible(candidate, policy, null), false);

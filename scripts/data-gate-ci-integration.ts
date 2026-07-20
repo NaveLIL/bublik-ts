@@ -37,7 +37,8 @@ const OWNED_DATABASES = Object.freeze({
 const OWNED_DATABASE_NAMES = Object.freeze(Object.values(OWNED_DATABASES));
 const BASELINE = '20260719000000_baseline';
 const HARDENING = '20260719010000_hardening';
-const EXPECTED_POSTFLIGHT_CHECKS = 31;
+const VACATION_ROLE_SNAPSHOT = '20260721000000_vacation_role_snapshot_seal';
+const EXPECTED_POSTFLIGHT_CHECKS = 32;
 
 type CommandResult = SpawnSyncReturns<string>;
 type PostflightReport = {
@@ -242,6 +243,7 @@ async function assertMigrationSteps(
   assert.deepEqual(await readMigrationSteps(targetUrl), [
     [BASELINE, baselineSteps],
     [HARDENING, 1],
+    [VACATION_ROLE_SNAPSHOT, 1],
   ]);
 }
 

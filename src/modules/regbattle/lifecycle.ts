@@ -29,6 +29,7 @@ import { fetchSafeAutomaticRole } from '../../core/RolePolicy';
 import { Config } from '../../config';
 
 import {
+  DEFAULT_PING_ESCALATE_AFTER,
   EMPTY_DELETE_DELAY_MS,
   ROLE_INTEGRITY_INTERVAL_MS,
   PLAYED_RESET_CHECK_INTERVAL_MS,
@@ -83,6 +84,7 @@ import {
   isUnknownMemberError,
   isUnknownMessageError,
   canCreatePbSquadAtMskMinute,
+  playedResetDisposition,
 } from './safety';
 import {
   type PbChannelKind,
@@ -109,11 +111,18 @@ import {
 } from './voiceSessions';
 import {
   type PbPingEligibilitySnapshot,
+  buildPbMassRoleMentionPlan,
+  classifyPbIndividualPingEligibility,
   isPbRoleMutationSuppressed,
   isPbVacationExcluded,
   loadPbPingEligibilitySnapshot,
   pbPingCandidateFromMember,
 } from './pingEligibility';
+import {
+  isPingerEscalationCoolingDown,
+  loadPingerNoProgressCounter,
+} from './pingerCooldown';
+import { resolvePbPingerDisplayStatus } from './pingerDisplayStatus';
 import { resolveTeamsVoiceIntegration } from './teamsVoiceResolver';
 import { resolveStableIntegrityLocation, runIsolatedIntegrityTasks } from './integrityPolicy';
 import {
@@ -684,11 +693,15 @@ export async function refreshStatusPanel(
     const offlineAbsent: { id: string; displayName: string }[] = [];
     let onlineKosherCount = 0;
     let totalKosherCount = 0;
+    let panelEligibility: PbPingEligibilitySnapshot | null = null;
+    let panelPingRoleMembers: GuildMember[] = [];
+    let panelPbChannelIds = new Set<string>();
     if (config.pingRoleId) {
       const role = guild.roles.cache.get(config.pingRoleId);
       if (role) {
         const roleMembers = members.filter((member) =>
           member.roles.cache.has(config.pingRoleId));
+        panelPingRoleMembers = [...roleMembers.values()];
         let eligibility: PbPingEligibilitySnapshot;
         try {
           eligibility = await loadPbPingEligibilitySnapshot(
@@ -704,6 +717,7 @@ export async function refreshStatusPanel(
           scheduleStatusPanelRetry(guild, client, 5_000);
           return;
         }
+        panelEligibility = eligibility;
 
         // Подготовить ПБ channel IDs
         const pbChannelIds = new Set<string>();
@@ -712,6 +726,7 @@ export async function refreshStatusPanel(
           if (sq.airChannelId) pbChannelIds.add(sq.airChannelId);
         }
         if (config.reserveChannelId) pbChannelIds.add(config.reserveChannelId);
+        panelPbChannelIds = pbChannelIds;
 
         // Собрать текущих кошерных: кто онлайн-игнорирует, кто оффлайн, кто в бою
         const onlineAbsentMap = new Map<string, GuildMember>();
@@ -859,15 +874,98 @@ export async function refreshStatusPanel(
         });
     }
 
-    const { embed, row } = buildStatusPanelEmbed(squadInfos, onlineIgnoring, playedToday, offlineAbsent, locale, onlineKosherCount, totalKosherCount);
-
-    // Отправить или обновить
+    // Fetch the destination before deriving mention permissions so the panel
+    // describes the exact strategy available in this channel.
     await assertPanelStateCurrent();
     const fetchedAnnounceChannel = await client.channels.fetch(config.announceChannelId);
     if (!isStatusPanelTextChannel(fetchedAnnounceChannel, guild.id)) {
       throw new Error(`Status panel announce channel ${config.announceChannelId} is unavailable or not GuildText in ${guild.id}`);
     }
     const ch = fetchedAnnounceChannel;
+
+    const notifyEnabledSquads = squadInfos.filter((squad) => !squad.notifyOff);
+    const allNotifyEnabledSquadsFull = notifyEnabledSquads.length > 0 &&
+      notifyEnabledSquads.every((squad) => squad.count >= squad.size);
+    const pingRole = config.pingRoleId
+      ? guild.roles.cache.get(config.pingRoleId) ?? null
+      : null;
+    const botMember = guild.members.me;
+    const canMentionRole = Boolean(
+      pingRole && (
+        pingRole.mentionable ||
+        (botMember && ch.permissionsFor(botMember)?.has(PermissionsBitField.Flags.MentionEveryone))
+      ),
+    );
+    const policy = {
+      pingRoleId: config.pingRoleId ?? null,
+      playedTodayRoleId: config.playedTodayRoleId ?? null,
+      pbChannelIds: panelPbChannelIds,
+    };
+    const exclusions = { vacation: 0, played: 0, inPb: 0, bot: 0 };
+    let eligibleIndividualCount = 0;
+    const pingCandidates = panelPingRoleMembers.map(pbPingCandidateFromMember);
+    for (const candidate of pingCandidates) {
+      const reason = classifyPbIndividualPingEligibility(candidate, policy, panelEligibility);
+      if (reason === 'eligible') eligibleIndividualCount++;
+      else if (reason === 'vacation') exclusions.vacation++;
+      else if (reason === 'played') exclusions.played++;
+      else if (reason === 'in_pb') exclusions.inPb++;
+      else if (reason === 'bot') exclusions.bot++;
+    }
+
+    const unavailablePingRoleState = new Map<string, boolean>();
+    if (config.pingRoleId && panelEligibility) {
+      for (const userId of panelEligibility.excludedUserIds) {
+        unavailablePingRoleState.set(
+          userId,
+          members.get(userId)?.roles.cache.has(config.pingRoleId) === true,
+        );
+      }
+    }
+    // Permission is deliberately evaluated separately so the embed can tell
+    // administrators whether population safety or Discord permissions caused
+    // the individual fallback.
+    const massRoleSafe = Boolean(
+      pingRole && panelEligibility && buildPbMassRoleMentionPlan(
+        policy,
+        panelEligibility,
+        unavailablePingRoleState,
+        pingCandidates,
+        true,
+      ),
+    );
+    const [escalationCoolingDown, noProgressCount] = notifyEnabledSquads.length > 0
+      ? await Promise.all([
+        isPingerEscalationCoolingDown(r, guild.id),
+        loadPingerNoProgressCounter(r, guild.id),
+      ])
+      : [false, 0];
+    const pingerStatus = resolvePbPingerDisplayStatus({
+      activeSquadCount: notifyEnabledSquads.length,
+      allFull: allNotifyEnabledSquadsFull,
+      pingRoleConfigured: Boolean(config.pingRoleId),
+      pingRolePresent: Boolean(pingRole),
+      reserveChannelConfigured: Boolean(config.reserveChannelId),
+      massRoleSafe,
+      canMentionRole,
+      eligibleIndividualCount,
+      exclusions,
+      escalationCoolingDown,
+      noProgressCount,
+      escalateAfter: config.pingEscalateAfter ?? DEFAULT_PING_ESCALATE_AFTER,
+    });
+    const { embed, row } = buildStatusPanelEmbed(
+      squadInfos,
+      onlineIgnoring,
+      playedToday,
+      offlineAbsent,
+      locale,
+      pingerStatus,
+      onlineKosherCount,
+      totalKosherCount,
+    );
+
+    // Отправить или обновить
 
     let reference = parseStatusPanelReference(await r.get(panelKey), config.announceChannelId);
     if (reference && reference.channelId !== config.announceChannelId) {
@@ -2891,9 +2989,14 @@ async function resetPlayedRolesSafely(
   for (const [, member] of [...role.members]) {
     if (member.user.bot || pbMemberIds.has(member.id)) continue;
     try {
-      await withMemberRoleLock(guild.id, member.id, async (lock) => {
+      const resetApplied = await withMemberRoleLock(guild.id, member.id, async (lock) => {
         if (await hasPbVoiceStateQuarantine(guild.id, member.id)) {
           throw new Error(`PB provenance is quarantined for ${guild.id}:${member.id}`);
+        }
+        // Leave both the Discord roles and durable played-origin record intact.
+        // The next scheduler pass retries after the vacation becomes terminal.
+        if (playedResetDisposition(await isPbRoleMutationSuppressed(member)) === 'defer') {
+          return false;
         }
         const origin = await getPlayedOrigin(guild.id, member.id);
         await lock.assertOwned();
@@ -2910,7 +3013,12 @@ async function resetPlayedRolesSafely(
         await member.roles.remove(playedTodayRoleId, 'RegBattle: ежедневный proven reset');
         await lock.assertOwned();
         await deletePlayedOrigin(guild.id, member.id, lock);
+        return true;
       });
+      if (!resetApplied) {
+        complete = false;
+        continue;
+      }
       count++;
     } catch (error) {
       complete = false;

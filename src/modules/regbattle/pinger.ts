@@ -387,6 +387,7 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
         INDIVIDUAL_ESCALATION_COOLDOWN_MS,
       ),
     ]);
+    await refreshPingerModePanel(guild);
   }
 
   // Обработка по фазе
@@ -587,6 +588,7 @@ async function handleRecruiting(
       state.individualQueue = [];
       state.individualIndex = 0;
       log.info(`Пингер гильдии ${guild.id}: эскалация к именным пингам`);
+      await refreshPingerModePanel(guild);
     }
   } catch (err) {
     log.error('Ошибка пинга роли', { error: String(err) });
@@ -625,6 +627,18 @@ async function handleRecruiting(
 //  Фаза: ESCALATED — именные пинги каждые 30 сек
 // ═══════════════════════════════════════════════
 
+async function refreshPingerModePanel(guild: Guild): Promise<void> {
+  if (!pingerClient) return;
+  try {
+    await refreshStatusPanel(guild, pingerClient, true);
+  } catch (error) {
+    // Panel observability must not interrupt the notification state machine.
+    log.warn(`Pinger ${guild.id}: notification mode panel refresh deferred`, {
+      error: String(error),
+    });
+  }
+}
+
 async function finishIndividualEscalation(
   guildId: string,
   state: GuildPingerState,
@@ -658,6 +672,7 @@ async function handleEscalated(
   // Очередь исчерпана → один круг завершён, кулдаун 30 мин
   if (state.individualQueue.length > 0 && state.individualIndex >= state.individualQueue.length) {
     await finishIndividualEscalation(guild.id, state);
+    await refreshPingerModePanel(guild);
     log.info(`Пингер гильдии ${guild.id}: именные пинги завершены (1 круг), кулдаун 30 мин`);
     return;
   }
@@ -672,9 +687,11 @@ async function handleEscalated(
     if (shouldEndEscalationAfterQueueRefresh(refreshOutcome)) {
       // Нет доступных бойцов → вернуться к ролевым пингам
       await finishIndividualEscalation(guild.id, state);
+      await refreshPingerModePanel(guild);
       log.info(`Пингер гильдии ${guild.id}: нет бойцов для именных пингов, кулдаун 30 мин`);
       return;
     }
+    await refreshPingerModePanel(guild);
   }
 
   const userId = state.individualQueue[state.individualIndex];

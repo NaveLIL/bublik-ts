@@ -5,13 +5,23 @@ import { getGuildLocale } from '../../core/GuildConfig';
 import { isGuildAllowed } from '../../core/Whitelist';
 import { fetchGuildIfPresent, fetchGuildMemberIfPresent } from '../../utils/helpers';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
-import { VacationStatus, SCHEDULER_INTERVAL_MS, NS_LOG_CHANNEL_ID, NsType } from './constants';
+import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
+import { getRedis } from '../../core/Redis';
+import {
+  VacationStatus,
+  SCHEDULER_INTERVAL_MS,
+  VACATION_ROLE_INTEGRITY_INTERVAL_MS,
+  NS_LOG_CHANNEL_ID,
+  NsType,
+} from './constants';
 import { isNsInformationalVacation } from './state';
 import {
   claimReminder,
   findActiveEnded,
   findActiveNeedingReminder,
   findLiveRoleVacations,
+  findLiveRoleVacationUserIds,
+  findVacationRoleConfigs,
   findNsActiveEnded,
   findPendingExpired,
   findStaleActivating,
@@ -27,6 +37,7 @@ import {
   restoreNsRoleVacation,
   restoreVacation,
   reconcileActiveVacationRoles,
+  removeStaleVacationRole,
 } from './saga';
 import {
   buildDmExpired,
@@ -43,11 +54,18 @@ export function startScheduler(client: BublikClient): void {
     exclusive: true,
     immediate: true,
   });
+  scheduleTask(
+    'vacation:role-integrity',
+    VACATION_ROLE_INTEGRITY_INTERVAL_MS,
+    () => checkVacationRoleIntegrity(client),
+    { exclusive: true, immediate: true },
+  );
   log.info('Шедулер отпусков запущен (интервал 60с)');
 }
 
 export function stopScheduler(): void {
   unscheduleTask('vacation:scheduler');
+  unscheduleTask('vacation:role-integrity');
   log.info('Шедулер отпусков остановлен');
 }
 
@@ -59,6 +77,54 @@ async function runChecks(client: BublikClient): Promise<void> {
   await checkVacationEnd(client);
   await checkStaleNsActivations(client);
   await checkNsExpiry(client);
+}
+
+/**
+ * The configured vacation role is a projection of durable vacation state, not
+ * a second source of truth. Remove stale/manual markers; active vacations are
+ * handled above and retain precedence over the PB ping role.
+ */
+async function checkVacationRoleIntegrity(client: BublikClient): Promise<void> {
+  const redis = getRedis();
+  for (const config of await findVacationRoleConfigs()) {
+    if (!config.vacationRoleId || !isGuildAllowed(config.guildId)) continue;
+    try {
+      const claimed = await redis.set(
+        `vac:role-integrity:${config.guildId}`,
+        String(Date.now()),
+        'PX',
+        VACATION_ROLE_INTEGRITY_INTERVAL_MS,
+        'NX',
+      );
+      if (claimed !== 'OK') continue;
+      const guild = await fetchGuildIfPresent(() => client.guilds.fetch(config.guildId));
+      if (!guild) continue;
+      const members = await getCompleteGuildMembers(guild);
+      const roleHolders = members.filter((member) =>
+        member.roles.cache.has(config.vacationRoleId!));
+      const liveUserIds = await findLiveRoleVacationUserIds(
+        guild.id,
+        [...roleHolders.keys()],
+      );
+
+      for (const member of roleHolders.values()) {
+        if (liveUserIds.has(member.id)) continue;
+        try {
+          if (await removeStaleVacationRole(member, config.vacationRoleId)) {
+            log.warn(`Removed stale vacation role from ${member.id} in ${guild.id}`);
+          }
+        } catch (error) {
+          log.warn(`Vacation role integrity for ${member.id} retained for retry`, {
+            error: String(error),
+          });
+        }
+      }
+    } catch (error) {
+      log.warn(`Vacation role integrity for guild ${config.guildId} retained for retry`, {
+        error: String(error),
+      });
+    }
+  }
 }
 
 /**

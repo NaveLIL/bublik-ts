@@ -194,6 +194,7 @@ test('postflight schema requirements cover every hardening relation and critical
   for (const key of [
     'team_members.guildId',
     'vacation_requests.activeKey',
+    'vacation_requests.roleSnapshotAt',
     'ns_vacations.activeKey',
     'team_applications.activeKey',
     'team_sessions.squadVoiceId',
@@ -227,8 +228,8 @@ function validMigrationHistory(baselineSteps: 0 | 1) {
   return specs.map((spec: { name: string; sha256: string }, index: number) => ({
     migration_name: spec.name,
     checksum: spec.sha256,
-    started_at: new Date(`2026-07-19T22:54:${index ? '29' : '26'}.000Z`),
-    finished_at: new Date(`2026-07-19T22:54:${index ? '30' : '27'}.000Z`),
+    started_at: new Date(Date.UTC(2026, 6, 19, 22, 54, 26 + index * 3)),
+    finished_at: new Date(Date.UTC(2026, 6, 19, 22, 54, 27 + index * 3)),
     rolled_back_at: null,
     logs: null,
     applied_steps_count: index === 0 ? baselineSteps : 1,
@@ -257,7 +258,7 @@ test('postflight migration history rejects unknown, reordered, rolled-back and m
     applied_steps_count: 0,
   });
   const differences = validateMigrationHistoryRows(damaged).join('\n');
-  assert.match(differences, /expected exactly 2/);
+  assert.match(differences, /expected exactly 3/);
   assert.match(differences, /unknown migration history row/);
   assert.match(differences, /rolled-back migration history row is forbidden/);
   assert.match(differences, /unfinished migration history row/);
@@ -287,6 +288,7 @@ test('postflight semantic checks are schema-qualified and cover every critical b
   assert.deepEqual(checks.map(({ id }: { id: string }) => id), [
     'team_members_parent_guild_backfill',
     'vacation_requests_active_key_semantics',
+    'vacation_requests_live_role_snapshot_sealed',
     'ns_vacations_active_key_semantics',
     'team_applications_active_key_semantics',
     'team_polls_active_key_semantics',

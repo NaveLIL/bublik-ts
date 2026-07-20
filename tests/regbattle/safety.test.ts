@@ -13,6 +13,8 @@ import {
   canBypassSquadCreationWindow,
   canCreatePbSquadAtMskMinute,
   isMinuteInHalfOpenDailyWindow,
+  playedResetDisposition,
+  reprimandTypeRoleConflictsWithProtectedRole,
 } from '../../src/modules/regbattle/safety';
 
 test('only authoritative Discord not-found codes permit destructive recovery', () => {
@@ -88,4 +90,22 @@ test('half-open PB preparation windows wrap midnight and include NA hours', () =
   for (const [minute, expected] of cases) {
     assert.equal(canCreatePbSquadAtMskMinute(minute), expected, `minute ${minute}`);
   }
+});
+
+test('reprimand type roles cannot alias PB capabilities or the vacation marker', () => {
+  const coreRoles = {
+    pingRoleId: 'ping',
+    inSquadRoleId: 'squad',
+    playedTodayRoleId: 'played',
+  };
+  assert.equal(reprimandTypeRoleConflictsWithProtectedRole('ping', coreRoles, 'vacation'), true);
+  assert.equal(reprimandTypeRoleConflictsWithProtectedRole('squad', coreRoles, 'vacation'), true);
+  assert.equal(reprimandTypeRoleConflictsWithProtectedRole('played', coreRoles, 'vacation'), true);
+  assert.equal(reprimandTypeRoleConflictsWithProtectedRole('vacation', coreRoles, 'vacation'), true);
+  assert.equal(reprimandTypeRoleConflictsWithProtectedRole('warning', coreRoles, 'vacation'), false);
+});
+
+test('daily played reset is deferred without touching provenance during vacation', () => {
+  assert.equal(playedResetDisposition(false), 'apply');
+  assert.equal(playedResetDisposition(true), 'defer');
 });

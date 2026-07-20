@@ -40,6 +40,8 @@ import { i18n } from '../../core/I18n';
 import { getGuildLocale } from '../../core/GuildConfig';
 import { fetchSafeAutomaticRole, hasDangerousAssignablePermissions } from '../../core/RolePolicy';
 import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
+import { getDatabase } from '../../core/Database';
+import { withMemberRoleLock } from '../../core/MemberRoleLock';
 
 import {
   RB_PREFIX,
@@ -104,7 +106,11 @@ import {
 } from './notifyToggle';
 import { recalculatePinger } from './pinger';
 import { fetchGuildMemberIfPresent, isTransientInteractionError } from '../../utils/helpers';
-import { isUnknownChannelError, isUnknownMessageError } from './safety';
+import {
+  isUnknownChannelError,
+  isUnknownMessageError,
+  reprimandTypeRoleConflictsWithProtectedRole,
+} from './safety';
 import {
   consumeDmPingPreviewAndClaim,
   createDmPingPreviewToken,
@@ -125,6 +131,7 @@ import {
   updateOrdersMuteRecord,
 } from './ordersMutes';
 import {
+  isPbRoleMutationSuppressed,
   isPbIndividualPingEligible,
   loadPbPingEligibilitySnapshot,
   pbPingCandidateFromMember,
@@ -1471,26 +1478,47 @@ async function removeReprimandTypeRoleIfUnused(
   reprimand: any,
   reason: string,
 ): Promise<boolean> {
-  if (await hasOtherLiveReprimand(
-    reprimand.id,
-    reprimand.guildId,
-    reprimand.offenderId,
-    reprimand.typeRoleId,
-  )) return true;
-
-  let fetchError: unknown = null;
-  const offender = guild.members.cache.get(reprimand.offenderId) ??
-    await guild.members.fetch(reprimand.offenderId).catch((error: unknown) => {
-      fetchError = error;
-      return null;
-    });
-  if (!offender) return !fetchError || (fetchError as any).code === 10007;
-  if (!offender.roles.cache.has(reprimand.typeRoleId)) return true;
   try {
-    await offender.roles.remove(reprimand.typeRoleId, reason);
-    return true;
+    return await withMemberRoleLock(guild.id, reprimand.offenderId, async (lock) => {
+      const [currentConfig, vacationConfig] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId: guild.id } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId: guild.id },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      // A legacy/drifted record must never strip a manually assigned protected
+      // role during rollback or annulment. Finalise the record without treating
+      // that protected role as owned by the reprimand.
+      if (!currentConfig || reprimandTypeRoleConflictsWithProtectedRole(
+        reprimand.typeRoleId,
+        currentConfig,
+        vacationConfig?.vacationRoleId ?? null,
+      )) return true;
+      if (await hasOtherLiveReprimand(
+        reprimand.id,
+        reprimand.guildId,
+        reprimand.offenderId,
+        reprimand.typeRoleId,
+      )) return true;
+
+      let fetchError: unknown = null;
+      const offender = await guild.members.fetch({
+        user: reprimand.offenderId,
+        force: true,
+      }).catch((error: unknown) => {
+        fetchError = error;
+        return null;
+      });
+      if (!offender) return !fetchError || (fetchError as any).code === 10007;
+      if (!offender.roles.cache.has(reprimand.typeRoleId)) return true;
+      await lock.assertOwned();
+      await offender.roles.remove(reprimand.typeRoleId, reason);
+      await lock.assertOwned();
+      return true;
+    });
   } catch (error) {
-    log.warn(`Не удалось снять роль выговора у ${offender.user.tag}`, { error: String(error) });
+    log.warn(`Не удалось снять роль выговора у ${reprimand.offenderId}`, { error: String(error) });
     return false;
   }
 }
@@ -1544,22 +1572,54 @@ async function handleReprimandModal(
     ? new Date(Date.now() + config.reprimandDurationDays * 24 * 60 * 60 * 1000)
     : null;
 
-  const reprimand = await createReprimand({
-    guildId: guild.id,
-    offenderId,
-    issuerId: interaction.user.id,
-    typeRoleId,
-    reason,
-    channelId: config.reprimandChannelId,
-    expiresAt,
-    status: 'granting',
-  });
-
+  let reprimand: Awaited<ReturnType<typeof createReprimand>>;
   try {
-    const safeTypeRole = await fetchSafeAutomaticRole(guild, typeRoleId);
-    await offender.roles.add(safeTypeRole, `Выговор: ${reason.slice(0, 100)}`);
+    reprimand = await withMemberRoleLock(guild.id, offenderId, async (lock) => {
+      const freshOffender = await guild.members.fetch({ user: offenderId, force: true });
+      const [freshConfig, vacationConfig] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId: guild.id } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId: guild.id },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      if (
+        !freshConfig ||
+        !freshConfig.reprimandTypeRoleIds.includes(typeRoleId) ||
+        reprimandTypeRoleConflictsWithProtectedRole(
+          typeRoleId,
+          freshConfig,
+          vacationConfig?.vacationRoleId ?? null,
+        )
+      ) {
+        throw new Error('Reprimand type role conflicts with a protected PB/vacation role');
+      }
+      if (await isPbRoleMutationSuppressed(freshOffender)) {
+        throw new Error('Reprimand role grant is suppressed while the member is on vacation');
+      }
+
+      const created = await createReprimand({
+        guildId: guild.id,
+        offenderId,
+        issuerId: interaction.user.id,
+        typeRoleId,
+        reason,
+        channelId: config.reprimandChannelId,
+        expiresAt,
+        status: 'granting',
+      });
+      try {
+        const safeTypeRole = await fetchSafeAutomaticRole(guild, typeRoleId);
+        await lock.assertOwned();
+        await freshOffender.roles.add(safeTypeRole, `Выговор: ${reason.slice(0, 100)}`);
+        await lock.assertOwned();
+        return created;
+      } catch (error) {
+        await deleteReprimandStatusCas(created.id, ['granting']);
+        throw error;
+      }
+    });
   } catch (err) {
-    await deleteReprimandStatusCas(reprimand.id, ['granting']);
     log.warn(`Не удалось выдать роль выговора ${typeName} для ${offender.user.tag}`, { error: String(err) });
     await interaction.editReply({ embeds: [rbError('Не удалось выдать роль взыскания; операция отменена без изменения состояния.', locale)] });
     return;

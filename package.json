@@ -1,6 +1,6 @@
 {
   "name": "bublik-bot",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Bublik — модульный Discord-бот с hot-reload, i18n, PostgreSQL & Redis",
   "author": "NaveLIL",
   "license": "UNLICENSED",

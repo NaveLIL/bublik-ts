@@ -315,6 +315,8 @@ function preflightCheckDefinitions(schema) {
 
 const HARDENING_MIGRATION = '20260719010000_hardening';
 const HARDENING_SHA256 = '84f224d922659e966ce1d7cde0cc5aae9327743a8c5b21e3a67cbea624ea0007';
+const VACATION_ROLE_SNAPSHOT_MIGRATION = '20260721000000_vacation_role_snapshot_seal';
+const VACATION_ROLE_SNAPSHOT_SHA256 = '341fab363c466627b908648181245fa24eea8dcd2325f7b5eee253dc50ff0772';
 const PRISMA_SCHEMA_PATH = resolve(__dirname, '..', 'prisma', 'schema.prisma');
 const MIGRATIONS_PATH = resolve(__dirname, '..', 'prisma', 'migrations');
 
@@ -330,6 +332,11 @@ function migrationSpecs() {
     {
       name: HARDENING_MIGRATION,
       sha256: HARDENING_SHA256,
+      appliedStepsCounts: [1],
+    },
+    {
+      name: VACATION_ROLE_SNAPSHOT_MIGRATION,
+      sha256: VACATION_ROLE_SNAPSHOT_SHA256,
       appliedStepsCounts: [1],
     },
   ];
@@ -424,14 +431,16 @@ function validateMigrationHistoryRows(rows) {
     }
   }
 
-  const [baselineRow, hardeningRow] = rows;
-  if (baselineRow?.finished_at != null && hardeningRow?.started_at != null) {
-    const baselineFinished = new Date(baselineRow.finished_at).getTime();
-    const hardeningStarted = new Date(hardeningRow.started_at).getTime();
-    if (!Number.isFinite(baselineFinished)
-      || !Number.isFinite(hardeningStarted)
-      || baselineFinished > hardeningStarted) {
-      differences.push('migration history is not in baseline-then-hardening chronological order');
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1];
+    const current = rows[index];
+    if (previous?.finished_at == null || current?.started_at == null) continue;
+    const previousFinished = new Date(previous.finished_at).getTime();
+    const currentStarted = new Date(current.started_at).getTime();
+    if (!Number.isFinite(previousFinished)
+      || !Number.isFinite(currentStarted)
+      || previousFinished > currentStarted) {
+      differences.push(`migration history is not chronological at prefix position ${index}`);
     }
   }
   return differences;
@@ -486,6 +495,7 @@ function requiredColumn(table, name, type, notNull, defaultValue = null) {
 function hardeningSchemaRequirements() {
   const columns = [
     requiredColumn('vacation_requests', 'activeKey', 'text', false),
+    requiredColumn('vacation_requests', 'roleSnapshotAt', 'timestamp(3) without time zone', false),
     requiredColumn('ns_vacations', 'activeKey', 'text', false),
     requiredColumn('team_members', 'guildId', 'text', true),
     requiredColumn('team_invites', 'processingAt', 'timestamp(3) without time zone', false),
@@ -865,6 +875,15 @@ function postflightCheckDefinitions(schema) {
             THEN "guildId" || ':' || "userId"
           ELSE NULL
         END
+      `,
+    },
+    {
+      id: 'vacation_requests_live_role_snapshot_sealed',
+      query: `
+        SELECT COUNT(*)::text AS violations
+        FROM ${table('vacation_requests')}
+        WHERE "status" IN ('activating', 'active', 'restoring')
+          AND "roleSnapshotAt" IS NULL
       `,
     },
     {

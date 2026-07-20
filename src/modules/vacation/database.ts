@@ -14,6 +14,7 @@ import {
   nsVacationActiveKey,
   vacationActiveKey,
 } from './state';
+import { withVacationRoleConfigLock } from './roleConfigLock';
 
 const CACHE_PREFIX = 'vac:cfg';
 const CACHE_TTL = 600; // 10 минут
@@ -48,6 +49,14 @@ export async function upsertConfig(guildId: string, data: Record<string, any>) {
 export async function deleteConfig(guildId: string) {
   await getDatabase().vacationConfig.deleteMany({ where: { guildId } });
   await getRedis().del(`${CACHE_PREFIX}:${guildId}`);
+}
+
+/** Configurations whose Discord vacation role must mirror durable state. */
+export async function findVacationRoleConfigs() {
+  return getDatabase().vacationConfig.findMany({
+    where: { vacationRoleId: { not: null } },
+    select: { guildId: true, vacationRoleId: true },
+  });
 }
 
 // (invalidateConfigCache удалён — upsertConfig обновляет кэш автоматически)
@@ -139,12 +148,15 @@ export async function createRequest(data: VacationRequestCreate) {
     });
   if (!VACATION_ROLE_LIVE_STATUSES.includes(status)) return create(getDatabase());
 
-  return getDatabase().$transaction(async (tx) => {
-    await lockRoleMutationSlot(tx, data.guildId, data.userId);
-    if (await hasLiveNsRoleMutation(tx, data.guildId, data.userId)) {
-      throw new RoleVacationConflictError();
-    }
-    return create(tx);
+  return withVacationRoleConfigLock(data.guildId, async (configLock) => {
+    await configLock.assertOwned();
+    return getDatabase().$transaction(async (tx) => {
+      await lockRoleMutationSlot(tx, data.guildId, data.userId);
+      if (await hasLiveNsRoleMutation(tx, data.guildId, data.userId)) {
+        throw new RoleVacationConflictError();
+      }
+      return create(tx);
+    });
   });
 }
 
@@ -155,17 +167,67 @@ export async function getRequest(id: string) {
   });
 }
 
-/** Persist provenance before a live PB ping role is removed from Discord. */
-export async function appendLiveVacationSavedRole(id: string, roleId: string) {
-  await getDatabase().vacationRequest.updateMany({
+/** Authoritative role-bearing vacation for one member, if one exists. */
+export async function findLiveRoleVacationForMember(guildId: string, userId: string) {
+  return getDatabase().vacationRequest.findFirst({
+    where: {
+      guildId,
+      userId,
+      status: { in: [VacationStatus.Activating, VacationStatus.Active] },
+    },
+    include: { config: true },
+  });
+}
+
+export async function findLiveRoleVacationUserIds(
+  guildId: string,
+  userIds: readonly string[],
+): Promise<Set<string>> {
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+  if (uniqueUserIds.length === 0) return new Set();
+  const rows = await getDatabase().vacationRequest.findMany({
+    where: {
+      guildId,
+      userId: { in: uniqueUserIds },
+      status: { in: [VacationStatus.Activating, VacationStatus.Active] },
+    },
+    select: { userId: true },
+  });
+  return new Set(rows.map(({ userId }) => userId));
+}
+
+/**
+ * First activation seals exact restoration provenance before Discord changes.
+ * An empty array is meaningful and is distinguished by roleSnapshotAt.
+ */
+export async function sealVacationRoleSnapshot(
+  id: string,
+  savedRoleIds: readonly string[],
+) {
+  const sealedAt = new Date();
+  const result = await getDatabase().vacationRequest.updateMany({
     where: {
       id,
-      status: { in: [VacationStatus.Activating, VacationStatus.Active] },
-      NOT: { savedRoleIds: { has: roleId } },
+      status: VacationStatus.Activating,
+      roleSnapshotAt: null,
     },
-    data: { savedRoleIds: { push: roleId } },
+    data: {
+      savedRoleIds: { set: [...savedRoleIds] },
+      roleSnapshotAt: sealedAt,
+    },
   });
-  return getRequest(id);
+  if (result.count !== 1) {
+    const current = await getRequest(id);
+    if (!current?.roleSnapshotAt) {
+      throw new Error(`Vacation ${id} role snapshot could not be sealed`);
+    }
+    return current;
+  }
+  const sealed = await getRequest(id);
+  if (!sealed?.roleSnapshotAt) {
+    throw new Error(`Vacation ${id} role snapshot seal was not durable`);
+  }
+  return sealed;
 }
 
 export async function updateRequest(id: string, data: Record<string, any>) {
@@ -195,7 +257,7 @@ export async function transitionRequest(
     ...data,
     ...(nextStatus && isVacationTerminalStatus(nextStatus) ? { activeKey: null } : {}),
   };
-  return getDatabase().$transaction(async (tx) => {
+  const performTransition = () => getDatabase().$transaction(async (tx) => {
     if (nextStatus === VacationStatus.Activating) {
       const current = await tx.vacationRequest.findUnique({ where: { id } });
       if (!current || !statuses.includes(current.status)) return null;
@@ -213,6 +275,19 @@ export async function transitionRequest(
     if (result.count !== 1) return null;
     return tx.vacationRequest.findUnique({ where: { id }, include: { config: true } });
   });
+  if (nextStatus !== VacationStatus.Activating) return performTransition();
+
+  // Resolve only the guild scope before taking the distributed config lock.
+  // The transaction above repeats every status check after the lock is owned.
+  const candidate = await getDatabase().vacationRequest.findUnique({
+    where: { id },
+    select: { guildId: true, status: true },
+  });
+  if (!candidate || !statuses.includes(candidate.status)) return null;
+  return withVacationRoleConfigLock(candidate.guildId, async (configLock) => {
+    await configLock.assertOwned();
+    return performTransition();
+  });
 }
 
 /**
@@ -223,26 +298,29 @@ export async function reserveForcedVacation(data: VacationRequestCreate) {
   const db = getDatabase();
   const key = vacationActiveKey(data.guildId, data.userId);
   try {
-    return await db.$transaction(async (tx) => {
-      await lockRoleMutationSlot(tx, data.guildId, data.userId);
-      if (await hasLiveNsRoleMutation(tx, data.guildId, data.userId)) return null;
-      const existing = await tx.vacationRequest.findUnique({ where: { activeKey: key } });
-      if (existing) {
-        if (existing.status !== VacationStatus.Pending) return null;
-        const changed = await tx.vacationRequest.updateMany({
-          where: { id: existing.id, status: VacationStatus.Pending, activeKey: key },
+    return await withVacationRoleConfigLock(data.guildId, async (configLock) => {
+      await configLock.assertOwned();
+      return db.$transaction(async (tx) => {
+        await lockRoleMutationSlot(tx, data.guildId, data.userId);
+        if (await hasLiveNsRoleMutation(tx, data.guildId, data.userId)) return null;
+        const existing = await tx.vacationRequest.findUnique({ where: { activeKey: key } });
+        if (existing) {
+          if (existing.status !== VacationStatus.Pending) return null;
+          const changed = await tx.vacationRequest.updateMany({
+            where: { id: existing.id, status: VacationStatus.Pending, activeKey: key },
+            data: { ...data, status: VacationStatus.Activating, activeKey: key },
+          });
+          if (changed.count !== 1) return null;
+          return tx.vacationRequest.findUnique({
+            where: { id: existing.id },
+            include: { config: true },
+          });
+        }
+
+        return tx.vacationRequest.create({
           data: { ...data, status: VacationStatus.Activating, activeKey: key },
-        });
-        if (changed.count !== 1) return null;
-        return tx.vacationRequest.findUnique({
-          where: { id: existing.id },
           include: { config: true },
         });
-      }
-
-      return tx.vacationRequest.create({
-        data: { ...data, status: VacationStatus.Activating, activeKey: key },
-        include: { config: true },
       });
     });
   } catch (error) {
@@ -487,15 +565,19 @@ export async function createNsVacation(data: {
   const mutatesRoles = ROLE_MUTATING_NS_TYPES.includes(data.type) && !isNsTerminalStatus(status);
   if (!mutatesRoles) return create(getDatabase());
 
-  return getDatabase().$transaction(async (tx) => {
-    await lockRoleMutationSlot(tx, data.guildId, data.userId);
-    if (
-      await hasLiveRegularRoleMutation(tx, data.guildId, data.userId) ||
-      await hasLiveNsRoleMutation(tx, data.guildId, data.userId)
-    ) {
-      throw new RoleVacationConflictError();
-    }
-    return create(tx);
+  return withVacationRoleConfigLock(data.guildId, async (configLock) => {
+    return getDatabase().$transaction(async (tx) => {
+      await configLock.assertOwned();
+      await lockRoleMutationSlot(tx, data.guildId, data.userId);
+      if (
+        await hasLiveRegularRoleMutation(tx, data.guildId, data.userId) ||
+        await hasLiveNsRoleMutation(tx, data.guildId, data.userId)
+      ) {
+        throw new RoleVacationConflictError();
+      }
+      await configLock.assertOwned();
+      return create(tx);
+    });
   });
 }
 
