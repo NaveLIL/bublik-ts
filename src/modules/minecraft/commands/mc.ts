@@ -38,7 +38,7 @@ const mcCommand: BublikCommand = {
         )
     ),
 
-  scope: CommandScope.Global,
+  scope: CommandScope.Guild,
   category: 'general',
   descriptionKey: 'commands.mc.description',
 
