@@ -1,4 +1,4 @@
-import net from 'net';
+import { Rcon } from 'rcon-client';
 import { logger } from '../../../core/Logger';
 
 const log = logger.child('Minecraft:RCON');
@@ -14,14 +14,28 @@ export async function executeRconCommand(
   command: string,
   options?: Partial<RconOptions>
 ): Promise<{ success: boolean; response?: string; error?: string }> {
-  // If RCON is not configured or fails network connect, log and fallback gracefully
-  log.info(`[RCON Exec] Выполнение команды на сервере: "${command}"`);
-  
-  // Clean command prefix if any
+  const host = options?.host ?? '100.98.99.103';
+  const port = options?.port ?? 25575;
+  const password = options?.password ?? process.env.RCON_PASSWORD ?? '43ee011b247d568a1a623769e2120f0fda70a1fd733a6650';
+
   const cleanCmd = command.startsWith('/') ? command.slice(1) : command;
-  
-  return {
-    success: true,
-    response: `Command executed: ${cleanCmd}`,
-  };
+
+  try {
+    const rcon = await Rcon.connect({
+      host,
+      port,
+      password,
+      timeout: options?.timeoutMs ?? 5000,
+    });
+
+    const response = await rcon.send(cleanCmd);
+    await rcon.end();
+
+    log.info(`[RCON] Успешно выполнено: "${cleanCmd}"`);
+    return { success: true, response };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log.error(`[RCON] Ошибка выполнения "${cleanCmd}": ${msg}`);
+    return { success: false, error: msg };
+  }
 }
