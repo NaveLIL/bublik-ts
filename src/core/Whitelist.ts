@@ -40,16 +40,15 @@ export function initWhitelist(force = false): Promise<void> {
         });
 
         let didSeed = false;
-        if (bootstrap.count === 1 && persisted.length === 0 && Config.allowedGuilds.length > 0) {
-          await tx.allowedGuild.createMany({
+        if (Config.allowedGuilds.length > 0) {
+          const res = await tx.allowedGuild.createMany({
             data: Config.allowedGuilds.map((guildId) => ({ guildId })),
             skipDuplicates: true,
           });
-          didSeed = true;
+          didSeed = res.count > 0;
         }
 
-        // Re-read even when another process won the bootstrap claim while this
-        // transaction was waiting on its unique key.
+        // Re-read after syncing Config.allowedGuilds
         persisted = await tx.allowedGuild.findMany();
 
         return { list: persisted, seeded: didSeed };
