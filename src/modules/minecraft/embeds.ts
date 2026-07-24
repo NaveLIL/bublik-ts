@@ -1,6 +1,6 @@
 import { User } from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
-import { MinecraftAccountData } from './database';
+import { MinecraftAccountData, MinecraftShopItemData } from './database';
 
 export interface MinecraftServerMetrics {
   online: boolean;
@@ -131,7 +131,7 @@ export function buildMinecraftLinkEmbed(username: string, code: string): BublikE
       `Ваш одноразовый код подтверждения:\n` +
       `# \` ${code} \`\n\n` +
       `> ⏳ **Срок действия кода:** 10 минут\n` +
-      `> 💡 **Как подтвердить:** Введите команду \`/mc link code:${code}\` в этом дискорд-сервере или отправьте код модерации.`
+      `> 💡 **Как подтвердить:** Введите команду \`/mc link username:${username} code:${code}\` в этом дискорд-сервере или используйте \`/link\` в игре.`
     )
     .setThumbnail(`https://mc-heads.net/avatar/${username}/128`)
     .setTimestamp();
@@ -213,5 +213,52 @@ export function buildMinecraftVoiceEmbed(): BublikEmbed {
       `• **Микрофон:** Выберите устройство ввода в меню по клавише \`V\`\n\n` +
       `💡 *Если голосовой чат горит серым или не подключается — убедитесь, что ваш провайдер не блокирует UDP порт 25454.*`
     )
+    .setTimestamp();
+}
+
+// ── Phase 3 Embeds ─────────────────────────────
+
+export function buildMinecraftShopEmbed(
+  items: MinecraftShopItemData[],
+  userWallet: number
+): BublikEmbed {
+  const embed = new BublikEmbed()
+    .info()
+    .setTitle('🛒 Магазин EREZCRAFT | Покупки за Шекели ₪')
+    .setDescription(
+      `💰 **Ваш баланс:** **\`${userWallet}\`** ₪\n` +
+      `Покупайте ресурсы, компоненты Create и услуги прямо из Discord с мгновенной доставкой на сервер!\n` +
+      `──────────────────────────────────────────`
+    );
+
+  for (const item of items) {
+    embed.addFields({
+      name: `${item.iconEmoji} ${item.name} — ${item.priceShekels} ₪`,
+      value: `${item.description ?? 'Описание отсутствует'}\n` +
+             `*Команда покупки:* \`/mc buy item_id:${item.id}\``,
+      inline: false,
+    });
+  }
+
+  embed.setTimestamp();
+  return embed;
+}
+
+export function buildMinecraftPurchaseReceiptEmbed(
+  item: MinecraftShopItemData,
+  username: string,
+  newWallet: number
+): BublikEmbed {
+  return new BublikEmbed()
+    .success()
+    .setTitle(`🎉 Покупка успешно выданa!`)
+    .setDescription(
+      `### ${item.iconEmoji} **${item.name}**\n\n` +
+      `• **Получатель в игре:** \`${username}\`\n` +
+      `• **Списано:** **\`${item.priceShekels}\`** ₪\n` +
+      `• **Остаток на балансе:** **\`${newWallet}\`** ₪\n\n` +
+      `📦 *Предмет отправлен в инвентарь игрока на сервере EREZCRAFT.*`
+    )
+    .setThumbnail(`https://mc-heads.net/avatar/${username}/128`)
     .setTimestamp();
 }

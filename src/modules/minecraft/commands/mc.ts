@@ -16,11 +16,14 @@ import {
   buildMinecraftRulesEmbed,
   buildMinecraftModpackEmbed,
   buildMinecraftVoiceEmbed,
+  buildMinecraftShopEmbed,
+  buildMinecraftPurchaseReceiptEmbed,
 } from '../embeds';
 import {
   updateMinecraftConfig,
-  getOrCreateMinecraftConfig,
   getMinecraftAccountByDiscordId,
+  getMinecraftShopItems,
+  createMinecraftShopItem,
 } from '../database';
 import {
   requestAccountLink,
@@ -28,6 +31,8 @@ import {
   processUnlinkAccount,
   getPlayerProfile,
 } from '../services/link-service';
+import { purchaseMinecraftShopItem } from '../services/economy-bridge';
+import { getDatabase } from '../../../core/Database';
 
 const mcCommand: BublikCommand = {
   data: new SlashCommandBuilder()
@@ -76,6 +81,24 @@ const mcCommand: BublikCommand = {
             .setName('user')
             .setDescription('Участник Discord для проверки')
             .setRequired(false)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('shop')
+        .setDescription('Открыть магазин игровых предметов за Шекели ₪')
+        .setDescriptionLocalizations({ ru: 'Открыть магазин игровых предметов за Шекели ₪' })
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('buy')
+        .setDescription('Купить предмет в Minecraft за Шекели ₪')
+        .setDescriptionLocalizations({ ru: 'Купить предмет в Minecraft за Шекели ₪' })
+        .addStringOption((opt) =>
+          opt
+            .setName('item_id')
+            .setDescription('ID товара из /mc shop')
+            .setRequired(true)
         )
     )
     .addSubcommand((sub) =>
@@ -135,6 +158,41 @@ const mcCommand: BublikCommand = {
                 .setRequired(true)
             )
         )
+        .addSubcommand((sub) =>
+          sub
+            .setName('shop-add')
+            .setDescription('Добавить новый предмет в /mc shop')
+            .addStringOption((opt) =>
+              opt
+                .setName('name')
+                .setDescription('Название предмета')
+                .setRequired(true)
+            )
+            .addIntegerOption((opt) =>
+              opt
+                .setName('price')
+                .setDescription('Цена в Шекелях ₪')
+                .setRequired(true)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName('command')
+                .setDescription('RCON команда (например: give {username} minecraft:diamond 5)')
+                .setRequired(true)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName('icon')
+                .setDescription('Эмодзи иконка (например: 💎)')
+                .setRequired(false)
+            )
+            .addStringOption((opt) =>
+              opt
+                .setName('description')
+                .setDescription('Описание предмета')
+                .setRequired(false)
+            )
+        )
     ),
 
   scope: CommandScope.Guild,
@@ -187,13 +245,51 @@ const mcCommand: BublikCommand = {
       return;
     }
 
+    // Handle /mc shop
+    if (subcommand === 'shop') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const db = getDatabase();
+      const profile = await db.economyProfile.findUnique({
+        where: { guildId_userId: { guildId, userId: interaction.user.id } },
+      });
+      const userWallet = profile?.wallet ?? 0;
+      const items = await getMinecraftShopItems(guildId);
+      const embed = buildMinecraftShopEmbed(items, userWallet);
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
+    // Handle /mc buy
+    if (subcommand === 'buy') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const itemId = interaction.options.getString('item_id', true).trim();
+      const result = await purchaseMinecraftShopItem(guildId, member, itemId);
+
+      if (!result.success) {
+        let msg = '❌ Ошибка при покупке предмета.';
+        if (result.reason === 'NOT_LINKED') {
+          msg = '⚠️ Ваш Discord не привязан к Minecraft! Сначала привяжите аккаунт командой `/mc link username:<ник>`.';
+        } else if (result.reason === 'ITEM_NOT_FOUND') {
+          msg = '❌ Товар не найден или временно недоступен.';
+        } else if (result.reason === 'INSUFFICIENT_FUNDS') {
+          msg = `❌ Недостаточно Шекелей! Стоимость товара: **${result.item?.priceShekels}** ₪, ваш баланс: **${result.currentWallet ?? 0}** ₪.`;
+        }
+        await interaction.editReply({ content: msg });
+        return;
+      }
+
+      const account = await getMinecraftAccountByDiscordId(guildId, interaction.user.id);
+      const embed = buildMinecraftPurchaseReceiptEmbed(result.item!, account!.minecraftUsername, result.newBalance!);
+      await interaction.editReply({ embeds: [embed] });
+      return;
+    }
+
     // Handle /mc link
     if (subcommand === 'link') {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const username = interaction.options.getString('username', true).trim();
       const code = interaction.options.getString('code')?.trim();
 
-      // Check if already linked
       const existing = await getMinecraftAccountByDiscordId(guildId, interaction.user.id);
       if (existing?.isLinked) {
         await interaction.editReply({
@@ -202,7 +298,6 @@ const mcCommand: BublikCommand = {
         return;
       }
 
-      // Confirm code step
       if (code) {
         const confirmResult = await processConfirmLink(guildId, member, code);
         if (!confirmResult.success) {
@@ -222,7 +317,6 @@ const mcCommand: BublikCommand = {
         return;
       }
 
-      // Code generation step
       const { code: newCode } = await requestAccountLink(guildId, interaction.user.id, username);
       const embed = buildMinecraftLinkEmbed(username, newCode);
       await interaction.editReply({ embeds: [embed] });
@@ -287,6 +381,27 @@ const mcCommand: BublikCommand = {
         await updateMinecraftConfig(guildId, { playerRoleId: role.id });
         await interaction.editReply({
           content: `✅ Роль игрока при привязке аккаунта установлена на <@&${role.id}>.`,
+        });
+        return;
+      }
+
+      if (subcommand === 'shop-add') {
+        const name = interaction.options.getString('name', true).trim();
+        const price = interaction.options.getInteger('price', true);
+        const commandStr = interaction.options.getString('command', true).trim();
+        const icon = interaction.options.getString('icon')?.trim() ?? '📦';
+        const desc = interaction.options.getString('description')?.trim();
+
+        const newItem = await createMinecraftShopItem(guildId, {
+          name,
+          priceShekels: price,
+          rconCommand: commandStr,
+          iconEmoji: icon,
+          description: desc,
+        });
+
+        await interaction.editReply({
+          content: `✅ В магазин добавлен новый предмет: ${newItem.iconEmoji} **${newItem.name}** за **${newItem.priceShekels}** ₪ (ID: \`${newItem.id}\`)`,
         });
         return;
       }
