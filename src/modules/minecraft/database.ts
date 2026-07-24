@@ -193,10 +193,36 @@ export async function confirmAccountLink(
   return { success: true, account: updated as MinecraftAccountData };
 }
 
+export async function forceLinkMinecraftAccount(
+  guildId: string,
+  discordId: string,
+  minecraftUsername: string
+): Promise<MinecraftAccountData> {
+  const db = getDatabase();
+  return db.minecraftAccount.upsert({
+    where: { guildId_discordId: { guildId, discordId } },
+    create: {
+      guildId,
+      discordId,
+      minecraftUsername,
+      isLinked: true,
+      linkedAt: new Date(),
+    },
+    update: {
+      minecraftUsername,
+      isLinked: true,
+      linkedAt: new Date(),
+      linkCode: null,
+      linkCodeExpiresAt: null,
+    },
+  }) as Promise<MinecraftAccountData>;
+}
+
 export async function unlinkMinecraftAccount(
   guildId: string,
   discordId: string
 ): Promise<boolean> {
+
   const db = getDatabase();
   try {
     await db.minecraftAccount.delete({

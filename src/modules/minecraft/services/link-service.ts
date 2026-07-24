@@ -2,6 +2,7 @@ import { GuildMember, User } from 'discord.js';
 import {
   createLinkCode,
   confirmAccountLink,
+  forceLinkMinecraftAccount,
   unlinkMinecraftAccount,
   getMinecraftAccountByDiscordId,
   getMinecraftAccountByUsername,
@@ -30,11 +31,43 @@ export async function requestAccountLink(
   return { code, expiresAt };
 }
 
+import { executeRconCommand } from './rcon-service';
+
 export async function processConfirmLink(
   guildId: string,
   member: GuildMember,
-  code: string
+  code: string,
+  username?: string
 ): Promise<{ success: boolean; account?: MinecraftAccountData; reason?: string }> {
+  // If username is provided, try in-game RCON verification first
+  if (username) {
+    const rconResult = await executeRconCommand(`erezcraft_verify_code ${username} ${code}`).catch(() => null);
+    if (rconResult?.success && rconResult.response) {
+      const resp = rconResult.response.trim();
+      if (resp === 'VERIFIED') {
+        const account = await forceLinkMinecraftAccount(guildId, member.id, username);
+        log.info(`Аккаунт Minecraft ${username} привязан к ${member.user.tag} (подтверждено в игре)`);
+
+        // Assign player role if configured
+        const config = await getMinecraftConfig(guildId);
+        if (config?.playerRoleId) {
+          const role = member.guild.roles.cache.get(config.playerRoleId);
+          if (role) {
+            await member.roles.add(role).catch((err) => {
+              log.warn(`Не удалось выдать роль игрока ${config.playerRoleId}`, err);
+            });
+          }
+        }
+        return { success: true, account };
+      } else if (resp === 'EXPIRED') {
+        return { success: false, reason: 'CODE_EXPIRED' };
+      } else if (resp === 'INVALID_CODE') {
+        return { success: false, reason: 'INVALID_CODE' };
+      }
+    }
+  }
+
+  // Fallback to database link code verification
   const result = await confirmAccountLink(guildId, member.id, code);
 
   if (result.success && result.account) {
@@ -54,6 +87,7 @@ export async function processConfirmLink(
 
   return result;
 }
+
 
 export async function processUnlinkAccount(
   guildId: string,

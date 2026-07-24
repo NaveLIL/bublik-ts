@@ -311,7 +311,8 @@ const mcCommand: BublikCommand = {
       }
 
       if (code) {
-        const confirmResult = await processConfirmLink(guildId, member, code);
+        const confirmResult = await processConfirmLink(guildId, member, code, username);
+
         if (!confirmResult.success) {
           let reasonText = 'Неверный код подтверждения.';
           if (confirmResult.reason === 'CODE_EXPIRED') {
