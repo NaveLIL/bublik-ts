@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-protected/
 *.js.map
 *.d.ts.map
 *.tsbuildinfo
@@ -8,9 +9,10 @@ dist
 .env.*.local
 logs/
 
-# Исходники — только локально, в репо пушится только dist-protected/
-src/
+# Исходники являются источником истины и должны проходить CI/сборку образа.
+# Защищённый runtime-артефакт собирается через build:protected.
 
 # Декларации типов в dist-protected — раскрывают структуру кода
 *.d.ts
 *.d.ts.map
+coverage/

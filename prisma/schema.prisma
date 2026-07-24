@@ -11,10 +11,10 @@ datasource db {
 // --- Core ---
 
 model GuildSettings {
-  id        String   @id @default(cuid())
-  guildId   String   @unique
-  locale    String   @default("ru")
-  prefix    String   @default("/")
+  id      String @id @default(cuid())
+  guildId String @unique
+  locale  String @default("ru")
+  prefix  String @default("/")
 
   // welcome & roles
   welcomeChannelId String?
@@ -49,55 +49,70 @@ model ModuleLog {
   @@map("module_logs")
 }
 
+/// Durable idempotency/once-only claims for cross-process operations.
+model OperationClaim {
+  key       String    @id
+  scope     String
+  guildId   String?
+  userId    String?
+  metadata  Json?
+  createdAt DateTime  @default(now())
+  expiresAt DateTime?
+
+  @@index([scope, guildId, userId])
+  @@index([expiresAt])
+  @@map("operation_claims")
+}
+
 // --- Economy ---
 
 model EconomyConfig {
-  id                String   @id @default(cuid())
-  guildId           String   @unique
-  enabled           Boolean  @default(true)
-  newsChannelId     String?
-  logChannelId      String?
+  id            String  @id @default(cuid())
+  guildId       String  @unique
+  enabled       Boolean @default(true)
+  newsChannelId String?
+  logChannelId  String?
 
   // Voice rewards
-  voiceRateBase     Int      @default(50)
-  voiceRatePb       Int      @default(200)
-  voiceMinMembers   Int      @default(2)
-  voiceIntervalMs   Int      @default(600000)
+  voiceRateBase   Int @default(50)
+  voiceRatePb     Int @default(200)
+  voiceMinMembers Int @default(2)
+  voiceIntervalMs Int @default(600000)
 
   // Cooldowns (ms)
-  dailyCooldown     BigInt   @default(86400000)
-  weeklyCooldown    BigInt   @default(604800000)
-  workCooldown      BigInt   @default(14400000)
-  crimeCooldown     BigInt   @default(28800000)
-  begCooldown       BigInt   @default(30000)
+  dailyCooldown  BigInt @default(86400000)
+  weeklyCooldown BigInt @default(604800000)
+  workCooldown   BigInt @default(14400000)
+  crimeCooldown  BigInt @default(28800000)
+  begCooldown    BigInt @default(30000)
 
   // Rewards
-  dailyBase         Int      @default(500)
-  dailyStreakAdd    Int      @default(50)
-  dailyStreakMax    Int      @default(500)
-  weeklyBase        Int      @default(5000)
-  weeklyPbBonus     Int      @default(2000)
-  workMin           Int      @default(200)
-  workMax           Int      @default(800)
-  crimeMin          Int      @default(0)
-  crimeMax          Int      @default(2000)
-  crimeSuccessRate  Int      @default(60)
-  crimeFine         Int      @default(500)
-  begMin            Int      @default(5)
-  begMax            Int      @default(100)
+  dailyBase        Int @default(500)
+  dailyStreakAdd   Int @default(50)
+  dailyStreakMax   Int @default(500)
+  weeklyBase       Int @default(5000)
+  weeklyPbBonus    Int @default(2000)
+  workMin          Int @default(200)
+  workMax          Int @default(800)
+  crimeMin         Int @default(0)
+  crimeMax         Int @default(2000)
+  crimeSuccessRate Int @default(60)
+  crimeFine        Int @default(500)
+  begMin           Int @default(5)
+  begMax           Int @default(100)
 
   // Taxes
-  transferTax       Int      @default(5)
-  bankWithdrawTax   Int      @default(2)
+  transferTax     Int @default(5)
+  bankWithdrawTax Int @default(2)
 
   // Casino
-  casinoEnabled     Boolean  @default(true)
-  casinoMaxBet      Int      @default(50000)
-  casinoMinBet      Int      @default(50)
-  slotsJackpot      Int      @default(1000)
+  casinoEnabled Boolean @default(true)
+  casinoMaxBet  Int     @default(50000)
+  casinoMinBet  Int     @default(50)
+  slotsJackpot  Int     @default(1000)
 
   // PB roles
-  pbRoleIds         String[] @default([])
+  pbRoleIds String[] @default([])
 
   // PB voice channel IDs (independent from regbattle squads)
   pbVoiceChannelIds String[] @default([])
@@ -106,90 +121,90 @@ model EconomyConfig {
   pbVoiceCategoryIds String[] @default([])
 
   // Rob
-  robCooldown       BigInt   @default(14400000)
-  robEnabled        Boolean  @default(true)
-  robFine           Int      @default(500)
-  robMaxPercent     Int      @default(30)
-  robMinSteal       Int      @default(100)
-  robSuccessRate    Int      @default(45)
+  robCooldown    BigInt  @default(14400000)
+  robEnabled     Boolean @default(true)
+  robFine        Int     @default(500)
+  robMaxPercent  Int     @default(30)
+  robMinSteal    Int     @default(100)
+  robSuccessRate Int     @default(45)
 
   // Heist (банковский налёт)
   heistEnabled         Boolean @default(true)
-  heistCooldownInit    BigInt  @default(86400000)   // 24ч инициатору
-  heistCooldownMember  BigInt  @default(43200000)   // 12ч участнику
-  heistAssembleMs      Int     @default(300000)     // 5 мин сбор команды
+  heistCooldownInit    BigInt  @default(86400000) // 24ч инициатору
+  heistCooldownMember  BigInt  @default(43200000) // 12ч участнику
+  heistAssembleMs      Int     @default(300000) // 5 мин сбор команды
   heistMinMembers      Int     @default(2)
   heistMaxMembers      Int     @default(4)
-  heistBaseChance      Int     @default(60)         // 2 чел = 60%
-  heistChancePerMember Int     @default(15)         // +15% за каждого сверх минимума
-  heistSafePenalty     Int     @default(20)         // -20% если у жертвы сейф
-  heistMinPercent      Int     @default(8)          // 8% от банка
+  heistBaseChance      Int     @default(60) // 2 чел = 60%
+  heistChancePerMember Int     @default(15) // +15% за каждого сверх минимума
+  heistSafePenalty     Int     @default(20) // -20% если у жертвы сейф
+  heistMinPercent      Int     @default(8) // 8% от банка
   heistMaxPercent      Int     @default(15)
-  heistFine            Int     @default(1000)       // штраф каждому при провале
+  heistFine            Int     @default(1000) // штраф каждому при провале
   heistMinVictimBank   Int     @default(2000)
 
   // Wanted-система
-  wantedEnabled        Boolean @default(true)
-  wantedDecayMs        BigInt  @default(172800000)  // 48ч на одну звезду
-  wantedCaptureMin     Int     @default(3)          // мин. звёзд для capture
-  wantedCaptureChance  Int     @default(70)
-  wantedVictimBonus    Int     @default(50)         // +50% если ловит сама жертва
-  wantedCaptureCooldown BigInt @default(21600000)   // 6ч охотнику
-  wantedCaptureReward  Int     @default(20)         // 20% кошелька цели
-  wantedCaptureFine    Int     @default(750)
-  policeRoleId         String?                      // Роль полиции для /capture
-  govStaffRoleId       String?                      // Роль сотрудников мэрии для /government
+  wantedEnabled         Boolean @default(true)
+  wantedDecayMs         BigInt  @default(172800000) // 48ч на одну звезду
+  wantedCaptureMin      Int     @default(3) // мин. звёзд для capture
+  wantedCaptureChance   Int     @default(70)
+  wantedVictimBonus     Int     @default(50) // +50% если ловит сама жертва
+  wantedCaptureCooldown BigInt  @default(21600000) // 6ч охотнику
+  wantedCaptureReward   Int     @default(20) // 20% кошелька цели
+  wantedCaptureFine     Int     @default(750)
+  policeRoleId          String? // Роль полиции для /capture
+  govStaffRoleId        String? // Роль сотрудников мэрии для /government
 
   // Грязные деньги
-  dirtyEnabled         Boolean @default(true)
-  dirtyExpireMs        BigInt  @default(86400000)   // 24ч
-  dirtyLaunderTax      Int     @default(15)         // 15% комиссия
+  dirtyEnabled    Boolean @default(true)
+  dirtyExpireMs   BigInt  @default(86400000) // 24ч
+  dirtyLaunderTax Int     @default(15) // 15% комиссия
 
   // Сейф / Отмычка (магазин)
-  safeEnabled          Boolean @default(true)
-  safeDurationMs       BigInt  @default(604800000)  // 7 дней
-  safePrice            Int     @default(10000)
-  safeMode             String  @default("partial")  // "partial" (-50% добычи) | "immune"
-  lockpickEnabled      Boolean @default(true)
-  lockpickPrice        Int     @default(3000)
-  lockpickBonus        Int     @default(20)         // +20% к successRate
+  safeEnabled     Boolean @default(true)
+  safeDurationMs  BigInt  @default(604800000) // 7 дней
+  safePrice       Int     @default(10000)
+  safeMode        String  @default("partial") // "partial" (-50% добычи) | "immune"
+  lockpickEnabled Boolean @default(true)
+  lockpickPrice   Int     @default(3000)
+  lockpickBonus   Int     @default(20) // +20% к successRate
 
   // Shop
-  shopEnabled       Boolean  @default(true)
+  shopEnabled Boolean @default(true)
 
   // Player marketplace (роли от игроков)
-  marketEnabled         Boolean @default(true)
-  marketSubmitFee       Int     @default(5000)   // взнос за заявку (возвращается при отказе)
-  marketCommissionPct   Int     @default(80)     // % продавцу (остаток уходит в "никуда")
-  marketModChannelId    String?                  // канал для уведомлений модераторов
-  marketMaxPerUser      Int     @default(3)      // макс. активных ролей у одного продавца
-  marketMaxPrice        Int     @default(500000)
-  marketMinPrice        Int     @default(1000)
+  marketEnabled       Boolean @default(true)
+  marketSubmitFee     Int     @default(5000) // взнос за заявку (возвращается при отказе)
+  marketCommissionPct Int     @default(80) // % продавцу (остаток уходит в "никуда")
+  marketModChannelId  String? // канал для уведомлений модераторов
+  marketMaxPerUser    Int     @default(3) // макс. активных ролей у одного продавца
+  marketMaxPrice      Int     @default(500000)
+  marketMinPrice      Int     @default(1000)
 
   // Сезонные эвенты / временные бусты
   // Все множители в "процентах от 100": 100 = x1.0, 150 = x1.5, 200 = x2.0
-  eventName            String  @default("")        // имя текущего эвента ("" = нет)
-  eventEndsAt          DateTime?                   // null = бесконечный, иначе авто-выкл
-  eventEarnMul         Int     @default(100)       // /work /crime /daily /weekly /beg
-  eventRobMul          Int     @default(100)       // /rob /heist добыча
-  eventWantedMul       Int     @default(100)       // звёзд получается × N (200 = double stars)
+  eventName           String    @default("") // имя текущего эвента ("" = нет)
+  eventEndsAt         DateTime? // null = бесконечный, иначе авто-выкл
+  eventEarnMul        Int       @default(100) // /work /crime /daily /weekly /beg
+  eventRobMul         Int       @default(100) // /rob /heist добыча
+  eventWantedMul      Int       @default(100) // звёзд получается × N (200 = double stars)
   // Weekend-буст (sat-sun по UTC) — независимо от eventName
-  eventWeekendEnabled  Boolean @default(false)
-  eventWeekendEarnMul  Int     @default(150)
-  eventWeekendRobMul   Int     @default(150)
+  eventWeekendEnabled Boolean   @default(false)
+  eventWeekendEarnMul Int       @default(150)
+  eventWeekendRobMul  Int       @default(150)
 
   // Auto-leaderboard
-  leaderboardChannelId  String?
-  leaderboardMessageId  String?
+  leaderboardChannelId String?
+  leaderboardMessageId String?
 
   // Welcome bonus (0 = disabled)
-  welcomeBonus      Int      @default(0)
+  welcomeBonus Int @default(0)
 
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Relations
-  shopItems         ShopItem[]
+  shopItems ShopItem[]
 
   @@map("economy_configs")
 }
@@ -223,19 +238,19 @@ model EconomyProfile {
   lastCapture     DateTime?
 
   // Грязные деньги
-  dirtyAmount     Int       @default(0)
-  dirtyClearAt    DateTime?
+  dirtyAmount  Int       @default(0)
+  dirtyClearAt DateTime?
 
   // Сейф / Отмычка / Маска
-  safeUntil       DateTime?
-  lockpickReady   Boolean   @default(false)
-  maskReady       Boolean   @default(false)
-  blackMarketSlots Int      @default(3)
+  safeUntil        DateTime?
+  lockpickReady    Boolean   @default(false)
+  maskReady        Boolean   @default(false)
+  blackMarketSlots Int       @default(3)
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  transactions    EconomyTransaction[]
+  transactions EconomyTransaction[]
 
   @@unique([guildId, userId])
   @@index([guildId])
@@ -255,7 +270,7 @@ model EconomyTransaction {
   profileId String
   createdAt DateTime @default(now())
 
-  profile   EconomyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  profile EconomyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   @@index([guildId, userId])
   @@index([createdAt])
@@ -266,19 +281,19 @@ model EconomyTransaction {
 // --- Heist (банковский налёт) ---
 
 model EconomyHeist {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   guildId      String
   initiatorId  String
   victimId     String
   channelId    String
   messageId    String?
-  status       String   @default("assembling")  // assembling | running | success | fail | cancelled | expired
+  status       String    @default("assembling") // assembling | running | success | fail | cancelled | expired
   expiresAt    DateTime
   resolvedAt   DateTime?
-  stolenAmount Int?     // сумма куша при success
-  createdAt    DateTime @default(now())
+  stolenAmount Int? // сумма куша при success
+  createdAt    DateTime  @default(now())
 
-  members      EconomyHeistMember[]
+  members EconomyHeistMember[]
 
   @@index([guildId, status])
   @@index([guildId, initiatorId])
@@ -287,13 +302,13 @@ model EconomyHeist {
 }
 
 model EconomyHeistMember {
-  id        String   @id @default(cuid())
-  heistId   String
-  userId    String
-  joinedAt  DateTime @default(now())
-  payout    Int      @default(0)   // что получил при success / штраф (отрицательно) при fail
+  id       String   @id @default(cuid())
+  heistId  String
+  userId   String
+  joinedAt DateTime @default(now())
+  payout   Int      @default(0) // что получил при success / штраф (отрицательно) при fail
 
-  heist     EconomyHeist @relation(fields: [heistId], references: [id], onDelete: Cascade)
+  heist EconomyHeist @relation(fields: [heistId], references: [id], onDelete: Cascade)
 
   @@unique([heistId, userId])
   @@map("economy_heist_members")
@@ -302,30 +317,30 @@ model EconomyHeistMember {
 // --- Shop ---
 
 model ShopItem {
-  id           String   @id @default(cuid())
-  guildId      String
-  roleId       String
-  name         String
-  description  String?
-  price        Int
+  id            String  @id @default(cuid())
+  guildId       String
+  roleId        String
+  name          String
+  description   String?
+  price         Int
   durationHours Int     @default(0)
-  maxStock     Int      @default(-1)
-  currentStock Int      @default(-1)
-  isActive     Boolean  @default(true)
-  configId     String
+  maxStock      Int     @default(-1)
+  currentStock  Int     @default(-1)
+  isActive      Boolean @default(true)
+  configId      String
 
   // Перки роли (бонусы для криминальной системы)
-  perks        Json?    // { robBonus, robDefense, dirtyMul, wantedDecayMul, captureBonus, cooldownMul, crimeBonus }
+  perks Json? // { robBonus, robDefense, dirtyMul, wantedDecayMul, captureBonus, cooldownMul, crimeBonus }
 
   // Маркетплейс игроков
-  sellerId         String?  // если задан — это роль от игрока, идёт комиссия
-  commissionPct    Int      @default(0)  // % продавцу
+  sellerId      String? // если задан — это роль от игрока, идёт комиссия
+  commissionPct Int     @default(0) // % продавцу
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  config       EconomyConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
-  purchases    ShopPurchase[]
+  config    EconomyConfig  @relation(fields: [configId], references: [id], onDelete: Cascade)
+  purchases ShopPurchase[]
 
   @@unique([guildId, roleId])
   @@index([guildId])
@@ -337,23 +352,23 @@ model ShopItem {
 // --- Player marketplace ---
 // Заявка от игрока на добавление роли в магазин. Требует одобрения админа.
 model ShopRoleRequest {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   guildId       String
   sellerId      String
   name          String
   description   String?
   proposedPrice Int
-  durationHours Int      @default(0)
+  durationHours Int       @default(0)
   perks         Json?
-  status        String   @default("pending")  // pending | approved | rejected | cancelled
+  status        String    @default("pending") // pending | approved | rejected | cancelled
   reviewerId    String?
   reviewNote    String?
-  feePaid       Int      @default(0)
-  commissionPct Int      @default(80)
+  feePaid       Int       @default(0)
+  commissionPct Int       @default(80)
   createdRoleId String?
-  itemId        String?  // привязка к созданному ShopItem
-  modMessageId  String?  // сообщение в канале модерации (для редактирования)
-  createdAt     DateTime @default(now())
+  itemId        String? // привязка к созданному ShopItem
+  modMessageId  String? // сообщение в канале модерации (для редактирования)
+  createdAt     DateTime  @default(now())
   reviewedAt    DateTime?
 
   @@index([guildId, status])
@@ -370,7 +385,7 @@ model ShopPurchase {
   expiresAt DateTime?
   createdAt DateTime  @default(now())
 
-  item      ShopItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  item ShopItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@index([guildId, userId])
   @@index([expiresAt])
@@ -381,47 +396,49 @@ model ShopPurchase {
 // --- RegBattle ---
 
 model RegbattleConfig {
-  id                   String   @id @default(cuid())
-  guildId              String   @unique
-  masterChannelId      String?
-  categoryId           String?
-  announceChannelId    String?
-  reserveChannelId     String?
-  pingRoleId           String?
-  inSquadRoleId        String?
-  commanderRoleIds     String[] @default([])
-  muteRoleIds          String[] @default([])
-  squadSize            Int      @default(8)
-  airSize              Int      @default(4)
-  pingEscalateAfter    Int      @default(6)
-  playedMinMinutes     Int      @default(15)
-  playedResetHour      Int      @default(23)
-  playedTodayRoleId    String?
-  reprimandAnnulRoleIds  String[] @default([])
+  id                    String   @id @default(cuid())
+  guildId               String   @unique
+  masterChannelId       String?
+  categoryId            String?
+  announceChannelId     String?
+  reserveChannelId      String?
+  pingRoleId            String?
+  inSquadRoleId         String?
+  commanderRoleIds      String[] @default([])
+  muteRoleIds           String[] @default([])
+  squadSize             Int      @default(8)
+  airSize               Int      @default(4)
+  pingEscalateAfter     Int      @default(6)
+  playedMinMinutes      Int      @default(15)
+  playedResetHour       Int      @default(23)
+  playedTodayRoleId     String?
+  reprimandAnnulRoleIds String[] @default([])
   reprimandChannelId    String?
   reprimandTypeRoleIds  String[] @default([])
   reprimandDurationDays Int      @default(0)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  squads               RegbattleSquad[]
+  squads RegbattleSquad[]
 
   @@map("regbattle_configs")
 }
 
 model RegbattleSquad {
-  id              String   @id @default(cuid())
-  guildId         String
-  number          Int
-  voiceChannelId  String   @unique
-  airChannelId    String?
-  panelMessageId  String?
-  ownerId         String
-  createdAt       DateTime @default(now())
-  configId        String
+  id             String   @id @default(cuid())
+  guildId        String
+  number         Int
+  voiceChannelId String   @unique
+  airChannelId   String?
+  panelMessageId String?
+  ownerId        String
+  createdAt      DateTime @default(now())
+  configId       String
 
-  config          RegbattleConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  config RegbattleConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
 
+  @@unique([guildId, number])
+  @@unique([guildId, ownerId])
   @@index([guildId])
   @@map("regbattle_squads")
 }
@@ -429,28 +446,28 @@ model RegbattleSquad {
 // --- Reprimands ---
 
 model Reprimand {
-  id                    String    @id @default(cuid())
-  guildId               String
-  offenderId            String
-  issuerId              String
-  typeRoleId            String
-  reason                String
-  status                String    @default("active")
-  messageId             String?
-  channelId             String?
-  appealCategoryId      String?
-  appealTextId          String?
-  appealVoiceId         String?
-  annulledById          String?
-  annulledAt            DateTime?
-  expiresAt             DateTime?
-  nextAppealAt          DateTime?
-  appealDecision        String?
-  appealDecisionById    String?
-  appealDecisionReason  String?
-  appealDecisionAt      DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  id                   String    @id @default(cuid())
+  guildId              String
+  offenderId           String
+  issuerId             String
+  typeRoleId           String
+  reason               String
+  status               String    @default("active")
+  messageId            String?
+  channelId            String?
+  appealCategoryId     String?
+  appealTextId         String?
+  appealVoiceId        String?
+  annulledById         String?
+  annulledAt           DateTime?
+  expiresAt            DateTime?
+  nextAppealAt         DateTime?
+  appealDecision       String?
+  appealDecisionById   String?
+  appealDecisionReason String?
+  appealDecisionAt     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   @@index([guildId])
   @@index([offenderId])
@@ -461,30 +478,30 @@ model Reprimand {
 // --- TempVoice ---
 
 model TempvoiceGenerator {
-  id                  String   @id @default(cuid())
-  guildId             String
-  channelId           String   @unique
-  categoryId          String
-  interfaceId         String?
-  defaultName         String   @default("{nickname}")
-  defaultLimit        Int      @default(0)
-  defaultBitrate      Int      @default(64000)
-  defaultRegion       String   @default("auto")
-  initialState        String   @default("unlocked")
-  maxChannelsPerUser  Int      @default(1)
-  maxUserLimit        Int      @default(99)
-  minUserLimit        Int      @default(0)
-  maxBitrate          Int      @default(96000)
-  minBitrate          Int      @default(8000)
-  boosterPerks        Boolean  @default(true)
-  immuneRoleIds       String[] @default([])
-  rewardAnnounceChId  String?
-  rewardRoleId        String?
-  rewardThresholdMin  Int      @default(3000)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  guildId            String
+  channelId          String   @unique
+  categoryId         String
+  interfaceId        String?
+  defaultName        String   @default("{nickname}")
+  defaultLimit       Int      @default(0)
+  defaultBitrate     Int      @default(64000)
+  defaultRegion      String   @default("auto")
+  initialState       String   @default("unlocked")
+  maxChannelsPerUser Int      @default(1)
+  maxUserLimit       Int      @default(99)
+  minUserLimit       Int      @default(0)
+  maxBitrate         Int      @default(96000)
+  minBitrate         Int      @default(8000)
+  boosterPerks       Boolean  @default(true)
+  immuneRoleIds      String[] @default([])
+  rewardAnnounceChId String?
+  rewardRoleId       String?
+  rewardThresholdMin Int      @default(3000)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  channels            TempvoiceChannel[]
+  channels TempvoiceChannel[]
 
   @@index([guildId])
   @@map("tempvoice_generators")
@@ -502,9 +519,9 @@ model TempvoiceChannel {
   createdAt      DateTime  @default(now())
   lastActivity   DateTime  @default(now())
 
-  generator      TempvoiceGenerator @relation(fields: [generatorId], references: [id], onDelete: Cascade)
-  blocked        TempvoiceBlocked[]
-  trusted        TempvoiceTrusted[]
+  generator TempvoiceGenerator @relation(fields: [generatorId], references: [id], onDelete: Cascade)
+  blocked   TempvoiceBlocked[]
+  trusted   TempvoiceTrusted[]
 
   @@index([guildId])
   @@index([ownerId])
@@ -516,7 +533,7 @@ model TempvoiceBlocked {
   channelId String
   userId    String
 
-  channel   TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@unique([channelId, userId])
   @@map("tempvoice_blocked")
@@ -527,22 +544,22 @@ model TempvoiceTrusted {
   channelId String
   userId    String
 
-  channel   TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channel TempvoiceChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@unique([channelId, userId])
   @@map("tempvoice_trusted")
 }
 
 model TempvoiceUserSettings {
-  id                String   @id @default(cuid())
+  id                String  @id @default(cuid())
   userId            String
   guildId           String
   savedName         String?
   savedLimit        Int?
   savedBitrate      Int?
   savedRegion       String?
-  rewardGranted     Boolean  @default(false)
-  totalVoiceMinutes Int      @default(0)
+  rewardGranted     Boolean @default(false)
+  totalVoiceMinutes Int     @default(0)
 
   @@unique([userId, guildId])
   @@map("tempvoice_user_settings")
@@ -551,30 +568,30 @@ model TempvoiceUserSettings {
 // --- Vacation ---
 
 model VacationConfig {
-  id               String   @id @default(cuid())
-  guildId          String   @unique
-  panelChannelId   String?
-  panelMessageId   String?
-  reviewChannelId  String?
-  logChannelId     String?
-  vacationRoleId   String?
-  removeRoleIds    String[] @default([])
-  reviewerRoleIds  String[] @default([])
-  pingRoleIds      String[] @default([])
-  maxDurationDays  Int      @default(30)
-  quickDurationH   Int      @default(12)
-  primeTimeStart   Int      @default(17)
-  primeTimeEnd     Int      @default(1)
-  primeTimeBuffer  Int      @default(1)
-  imageUrl         String?
-  autoDenyHours    Int      @default(8)
-  cooldownDays     Int      @default(3)
-  maxPerMonth      Int      @default(5)
-  maxQuickPerWeek  Int      @default(2)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id              String   @id @default(cuid())
+  guildId         String   @unique
+  panelChannelId  String?
+  panelMessageId  String?
+  reviewChannelId String?
+  logChannelId    String?
+  vacationRoleId  String?
+  removeRoleIds   String[] @default([])
+  reviewerRoleIds String[] @default([])
+  pingRoleIds     String[] @default([])
+  maxDurationDays Int      @default(30)
+  quickDurationH  Int      @default(12)
+  primeTimeStart  Int      @default(17)
+  primeTimeEnd    Int      @default(1)
+  primeTimeBuffer Int      @default(1)
+  imageUrl        String?
+  autoDenyHours   Int      @default(8)
+  cooldownDays    Int      @default(3)
+  maxPerMonth     Int      @default(5)
+  maxQuickPerWeek Int      @default(2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  requests         VacationRequest[]
+  requests VacationRequest[]
 
   @@map("vacation_configs")
 }
@@ -586,7 +603,8 @@ model VacationRequest {
   type            String    @default("regular")
   reason          String
   durationMinutes Int
-  status          String    @default("pending")
+  status          String    @default("pending") // pending | activating | active | restoring | denied | expired | completed
+  activeKey       String?   @unique // guildId:userId while non-terminal
   reviewerId      String?
   reviewMessageId String?
   savedRoleIds    String[]  @default([])
@@ -597,7 +615,7 @@ model VacationRequest {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  config          VacationConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  config VacationConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
 
   @@index([guildId, userId])
   @@index([status])
@@ -610,11 +628,12 @@ model NsVacation {
   id           String   @id @default(cuid())
   guildId      String
   userId       String
-  type         String   // shield (4ч, ПБ-щит) | troll (10мин, рофл) | vacation (отпуск, без ролей)
+  type         String // shield (4ч, ПБ-щит) | troll (10мин, рофл) | vacation (отпуск, без ролей)
   savedRoleIds String[] @default([])
-  status       String   @default("active") // active | completed
+  status       String   @default("active") // activating | active | restoring | completed
+  activeKey    String?  @unique // guildId:userId:scope while non-terminal
   reason       String?
-  messageId    String?  // ID лог-сообщения (для vacation type)
+  messageId    String? // ID лог-сообщения (для vacation type)
   startDate    DateTime @default(now())
   endDate      DateTime
   createdAt    DateTime @default(now())
@@ -630,9 +649,9 @@ model NsVacation {
 model BrTechEntry {
   id        Int      @id @default(autoincrement())
   guildId   String
-  br        String   // "4.0", "10.3"
-  category  String   // tanks | planes | helis | spaa
-  priority  String   // high | normal | low
+  br        String // "4.0", "10.3"
+  category  String // tanks | planes | helis | spaa
+  priority  String // high | normal | low
   name      String
   createdAt DateTime @default(now())
 
@@ -643,13 +662,13 @@ model BrTechEntry {
 }
 
 model BrPanel {
-  id              String   @id @default(cuid())
-  guildId         String   @unique
-  panelChannelId  String?
-  panelMessageId  String?
-  defaultBr       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  guildId        String   @unique
+  panelChannelId String?
+  panelMessageId String?
+  defaultBr      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@map("br_panels")
 }
@@ -657,25 +676,25 @@ model BrPanel {
 // --- Teams (PB Team System) ---
 
 model TeamConfig {
-  id                  String   @id @default(cuid())
-  guildId             String   @unique
+  id                   String   @id @default(cuid())
+  guildId              String   @unique
   applicationChannelId String? // Канал для заявок на создание команды
-  reportChannelId     String?  // Канал для отчётов после сессий
-  pollChannelId       String?  // Канал для опросов/сборов
+  reportChannelId      String? // Канал для отчётов после сессий
+  pollChannelId        String? // Канал для опросов/сборов
   leaderboardChannelId String? // Канал для лидерборда
   leaderboardMessageId String? // ID сообщения лидерборда (авто-обновление)
-  approverRoleIds     String[] @default([]) // Роли, одобряющие заявки
-  baseRoleId          String?  // Базовая роль (кто может создавать/вступать)
-  minSize             Int      @default(10)  // Минимальный размер команды
-  inviteTimeoutH      Int      @default(24)  // Таймаут инвайта (часы)
-  formationDays       Int      @default(7)   // Дней на формирование команды
-  disbandGraceDays    Int      @default(30)  // Дней до расформирования при < minSize
-  pollAutoHoursBefore Int      @default(2)   // За сколько часов до прайма авто-опрос
-  reportTimeoutH      Int      @default(3)   // Таймаут на заполнение отчёта (часы)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  approverRoleIds      String[] @default([]) // Роли, одобряющие заявки
+  baseRoleId           String? // Базовая роль (кто может создавать/вступать)
+  minSize              Int      @default(10) // Минимальный размер команды
+  inviteTimeoutH       Int      @default(24) // Таймаут инвайта (часы)
+  formationDays        Int      @default(7) // Дней на формирование команды
+  disbandGraceDays     Int      @default(30) // Дней до расформирования при < minSize
+  pollAutoHoursBefore  Int      @default(2) // За сколько часов до прайма авто-опрос
+  reportTimeoutH       Int      @default(3) // Таймаут на заполнение отчёта (часы)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  teams               Team[]
+  teams Team[]
 
   @@map("team_configs")
 }
@@ -685,20 +704,20 @@ model Team {
   guildId          String
   name             String
   roleId           String    @unique // Discord роль команды
-  leaderId         String    // Лидер команды
-  status           String    @default("forming") // forming | active | disbanding | disbanded
+  leaderId         String // Лидер команды
+  status           String    @default("forming") // forming | creation_cleanup | active | disbanding | deleting | disbanded
   disbandWarningAt DateTime? // Дата начала предупреждения о расформировании
   configId         String
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  config           TeamConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
-  members          TeamMember[]
-  invites          TeamInvite[]
-  applications     TeamApplication[]
-  sessions         TeamSession[]
-  seasonStats      TeamSeason[]
-  polls            TeamPoll[]
+  config       TeamConfig        @relation(fields: [configId], references: [id], onDelete: Cascade)
+  members      TeamMember[]
+  invites      TeamInvite[]
+  applications TeamApplication[]
+  sessions     TeamSession[]
+  seasonStats  TeamSeason[]
+  polls        TeamPoll[]
 
   @@unique([guildId, name])
   @@index([guildId])
@@ -709,11 +728,13 @@ model Team {
 model TeamMember {
   id       String   @id @default(cuid())
   teamId   String
-  userId   String   @unique // Один человек — одна команда
+  guildId  String
+  userId   String // Один человек — одна команда в пределах сервера
   joinedAt DateTime @default(now())
 
-  team     Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
+  @@unique([guildId, userId])
   @@index([teamId])
   @@map("team_members")
 }
@@ -723,11 +744,12 @@ model TeamInvite {
   teamId    String
   userId    String
   status    String   @default("pending") // pending | accepted | declined | expired
-  messageId String?  // ID DM-сообщения с инвайтом
+  messageId String? // ID DM-сообщения с инвайтом
   expiresAt DateTime
+  processingAt DateTime? // CAS lease for accept flow; recovered after restart
   createdAt DateTime @default(now())
 
-  team      Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   @@unique([teamId, userId])
   @@index([userId])
@@ -736,15 +758,18 @@ model TeamInvite {
 }
 
 model TeamApplication {
-  id              String   @id @default(cuid())
-  teamId          String
-  status          String   @default("pending") // pending | approved | rejected
-  messageId       String?  // ID сообщения в канале заявок
-  reviewerId      String?
-  reviewedAt      DateTime?
-  createdAt       DateTime @default(now())
+  id         String    @id @default(cuid())
+  teamId     String
+  status     String    @default("pending") // pending | creation_cleanup | approved | rejected
+  messageId  String? // ID сообщения в канале заявок
+  channelId  String? // Exact Discord channel used for the application
+  reviewerId String?
+  reviewedAt DateTime?
+  activeKey  String?   @unique // teamId while pending/reviewing; null once terminal
+  processingAt DateTime? // CAS review lease; stale leases return to pending
+  createdAt  DateTime  @default(now())
 
-  team            Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   @@index([teamId])
   @@index([status])
@@ -752,19 +777,21 @@ model TeamApplication {
 }
 
 model TeamSession {
-  id           String    @id @default(cuid())
-  teamId       String
-  guildId      String
-  squadNumber  Int?      // Номер отряда ПБ
-  startedAt    DateTime  @default(now())
-  endedAt      DateTime?
-  reportedById String?   // Кто заполнил отчёт
-  reportedPR   Int?      // Полковой рейтинг за сессию
-  reportedPlace Int?     // Место полка
-  reportedAt   DateTime?
-  createdAt    DateTime  @default(now())
+  id            String    @id @default(cuid())
+  teamId        String
+  guildId       String
+  squadNumber   Int? // Номер отряда ПБ
+  squadVoiceId  String?   @unique // Durable association with the exact PB voice
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  reportedById  String? // Кто заполнил отчёт
+  reportedPR    Int? // Полковой рейтинг за сессию
+  reportedPlace Int? // Место полка
+  reportedAt    DateTime?
+  reportReminderAt DateTime? // Persistent reminder de-duplication claim
+  createdAt     DateTime  @default(now())
 
-  team         Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   @@index([teamId])
   @@index([guildId, startedAt])
@@ -772,19 +799,19 @@ model TeamSession {
 }
 
 model TeamSeason {
-  id            String @id @default(cuid())
+  id            String   @id @default(cuid())
   teamId        String
-  season        Int    // 1-6 (Янв-Фев, Мар-Апр, ..., Ноя-Дек)
-  year          Int    // 2026, 2027...
-  totalPR       Int    @default(0)
-  totalSessions Int    @default(0)
-  totalPlace    Int    @default(0) // Сумма мест для расчёта среднего
-  bestPlace     Int    @default(300)
-  attendance    Int    @default(0) // Общее число участников за сезон (суммарно по сессиям)
+  season        Int // 1-6 (Янв-Фев, Мар-Апр, ..., Ноя-Дек)
+  year          Int // 2026, 2027...
+  totalPR       Int      @default(0)
+  totalSessions Int      @default(0)
+  totalPlace    Int      @default(0) // Сумма мест для расчёта среднего
+  bestPlace     Int      @default(300)
+  attendance    Int      @default(0) // Общее число участников за сезон (суммарно по сессиям)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  team          Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
 
   @@unique([teamId, season, year])
   @@index([year, season])
@@ -792,30 +819,52 @@ model TeamSeason {
 }
 
 model TeamPoll {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   teamId      String
-  messageId   String?  // ID сообщения опроса
-  channelId   String?  // Канал, где опрос
-  type        String   @default("manual") // manual | auto
-  scheduledAt DateTime?// Время ПБ (указанное лидером)
-  yesUserIds  String[] @default([])
-  noUserIds   String[] @default([])
-  voteTimes   Json     @default("{}") // { "userId": "18:00", ... } — время готовности каждого
-  status      String   @default("active") // active | closed
-  createdAt   DateTime @default(now())
+  messageId   String? // ID сообщения опроса
+  channelId   String? // Канал, где опрос
+  type        String    @default("manual") // manual | auto
+  scheduledAt DateTime? // Время ПБ (указанное лидером)
+  yesUserIds  String[]  @default([])
+  noUserIds   String[]  @default([])
+  voteTimes   Json      @default("{}") // { "userId": "18:00", ... } — время готовности каждого
+  status      String    @default("active") // active | closed
+  activeKey   String?   @unique // teamId while active; null once closed
+  dedupKey    String?   @unique // Durable auto-poll key (teamId + MSK date)
+  notifiedKeys String[] @default([]) // Durable threshold-notification claims
+  createdAt   DateTime  @default(now())
+  closedAt    DateTime?
+  uiClosedAt  DateTime? // Discord components were removed successfully
 
-  team        Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  team  Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  votes TeamPollVote[]
 
   @@index([teamId])
   @@index([status])
   @@map("team_polls")
 }
 
-model LeftMember {
+model TeamPollVote {
   id        String   @id @default(cuid())
-  guildId   String
+  pollId    String
   userId    String
-  leftAt    DateTime @default(now())
+  vote      String // yes | no
+  readyTime String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  poll TeamPoll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+  @@index([pollId, vote])
+  @@map("team_poll_votes")
+}
+
+model LeftMember {
+  id      String   @id @default(cuid())
+  guildId String
+  userId  String
+  leftAt  DateTime @default(now())
 
   @@unique([guildId, userId])
   @@index([leftAt])
@@ -823,35 +872,36 @@ model LeftMember {
 }
 
 model EconomyRaid {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   guildId       String
-  status        String   @default("pending") // pending (accumulating) | active (ongoing) | resolved
-  totalPool     Int      @default(0)
-  maxHp         Int      @default(0)
-  currentHp     Int      @default(0)
+  status        String    @default("pending") // pending (accumulating) | active (ongoing) | resolved
+  activeKey     String?   @unique // guildId while pending/active; null once resolved
+  totalPool     Int       @default(0)
+  maxHp         Int       @default(0)
+  currentHp     Int       @default(0)
   channelId     String?
   messageId     String?
   startedAt     DateTime?
   resolvedAt    DateTime?
   lastHitUserId String?
 
-  participants  EconomyRaidParticipant[]
+  participants      EconomyRaidParticipant[]
   abandonedAccounts EconomyRaidAbandoned[]
-  createdAt     DateTime @default(now())
+  createdAt         DateTime                 @default(now())
 
   @@index([guildId, status])
   @@map("economy_raids")
 }
 
 model EconomyRaidParticipant {
-  id        String   @id @default(cuid())
-  raidId    String
-  userId    String
-  damage    Int      @default(0)
-  payout    Int      @default(0)
-  joinedAt  DateTime @default(now())
+  id       String   @id @default(cuid())
+  raidId   String
+  userId   String
+  damage   Int      @default(0)
+  payout   Int      @default(0)
+  joinedAt DateTime @default(now())
 
-  raid      EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
+  raid EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
 
   @@unique([raidId, userId])
   @@index([raidId])
@@ -859,12 +909,12 @@ model EconomyRaidParticipant {
 }
 
 model EconomyRaidAbandoned {
-  id        String   @id @default(cuid())
-  raidId    String
-  userId    String
-  balance   Int
+  id      String @id @default(cuid())
+  raidId  String
+  userId  String
+  balance Int
 
-  raid      EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
+  raid EconomyRaid @relation(fields: [raidId], references: [id], onDelete: Cascade)
 
   @@unique([raidId, userId])
   @@index([raidId])
@@ -883,12 +933,12 @@ model EconomyInventoryItem {
   id          String   @id @default(cuid())
   guildId     String
   userId      String
-  itemKey     String   // e.g. "lockpick", "mask", "custom_radar"
-  name        String   // Название
-  type        String   // "contraband", "accessory", "custom"
+  itemKey     String // e.g. "lockpick", "mask", "custom_radar"
+  name        String // Название
+  type        String // "contraband", "accessory", "custom"
   quantity    Int      @default(1)
   description String?  @db.VarChar(255)
-  perks       Json?    // Характеристики предмета (e.g. { "robBonus": 5 })
+  perks       Json? // Характеристики предмета (e.g. { "robBonus": 5 })
   isCustom    Boolean  @default(false)
   creatorId   String?
   createdAt   DateTime @default(now())
@@ -910,29 +960,76 @@ model BlackMarketListing {
   description String?  @db.VarChar(255)
   perks       Json?
   isCustom    Boolean  @default(false)
+  creatorId   String?
   createdAt   DateTime @default(now())
 
   @@index([guildId])
   @@map("economy_black_market_listings")
 }
 
+/// Persistent escrow snapshot. A listing can disappear while its deal is still
+/// being accepted/rejected, so all item and price fields are copied here.
+model BlackMarketDeal {
+  id          String   @id @default(cuid())
+  listingId   String   @unique
+  guildId     String
+  sellerId    String
+  buyerId     String
+  itemKey     String
+  name        String
+  type        String
+  quantity    Int
+  unitPrice   Int
+  totalPrice  Int
+  description String?  @db.VarChar(255)
+  perks       Json?
+  isCustom    Boolean  @default(false)
+  creatorId   String?
+  status      String   @default("pending") // pending | accepted | rejected | expired
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([guildId, status])
+  @@index([buyerId, status])
+  @@index([expiresAt])
+  @@map("economy_black_market_deals")
+}
+
 model CustomItemRequest {
-  id            String   @id @default(cuid())
-  guildId       String
-  creatorId     String
-  name          String
-  description   String?
-  perks         Json?
-  feePaid       Int
-  status        String   @default("pending") // pending | approved | rejected
-  reviewerId    String?
-  reviewNote    String?
-  modMessageId  String?
-  createdAt     DateTime @default(now())
-  reviewedAt    DateTime?
+  id           String    @id @default(cuid())
+  guildId      String
+  creatorId    String
+  name         String
+  description  String?
+  perks        Json?
+  feePaid      Int
+  status       String    @default("pending") // pending | approved | rejected
+  reviewerId   String?
+  reviewNote   String?
+  modMessageId String?
+  createdAt    DateTime  @default(now())
+  reviewedAt   DateTime?
 
   @@index([guildId, status])
   @@index([creatorId])
   @@map("custom_item_requests")
+}
+
+// --- Minecraft ---
+
+model MinecraftConfig {
+  id              String    @id @default(cuid())
+  guildId         String    @unique
+  statusChannelId String?
+  statusMessageId String?
+  serverAddress   String    @default("play.erez.pro:25565")
+  serverName      String    @default("EREZCRAFT")
+  lastStatus      String?   // online | offline | degraded
+  lastAlertSentAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("minecraft_configs")
 }
 

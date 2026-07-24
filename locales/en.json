@@ -55,9 +55,15 @@
     },
     "br": {
       "description": "War Thunder tech reference by Battle Rating"
+    },
+    "minecraft": {
+      "description": "EREZCRAFT Minecraft Server Integration (Monitoring, Status, Link)"
     }
   },
   "commands": {
+    "mc": {
+      "description": "🎮 Minecraft EREZCRAFT module commands"
+    },
     "info": {
       "description": "Open the bot information panel"
     },
@@ -75,7 +81,8 @@
     "reload": {
       "description": "Reload a module without restarting",
       "success": "✅ Module **{module}** reloaded in **{time}ms**",
-      "error": "❌ Failed to reload module **{module}**"
+      "error": "❌ Failed to reload module **{module}**",
+      "self_error": "❌ Module **general** owns /reload and cannot safely reload itself. Restart the bot instead."
     },
     "voice": {
       "description": "Manage temporary voice channels (setup/remove/list)"
@@ -191,7 +198,7 @@
     "transfer_received": "**Received:** {amount}",
     "leaderboard_title": "Leaderboard — {guild}",
     "leaderboard_empty": "Nobody has earned a single shekel yet!",
-    "leaderboard_footer": "Page {page}/{total} • © NaveL for EREZ 2024–2026",
+    "leaderboard_footer": "Page {page}/{total} • © NaveLIL for EREZ 2024–2026",
     "locked": "Please wait, the previous operation is still processing…",
     "setup_title": "Economy — Settings",
     "setup_guild": "**Guild:** {name}",
@@ -738,7 +745,7 @@
       "leaderboard": {
         "title": "Leaderboard — {guildName}",
         "empty": "Nobody has earned a single shekel yet!",
-        "footer": "Page {page}/{total} • © NaveL for EREZ 2024–2026"
+        "footer": "Page {page}/{total} • © NaveLIL for EREZ 2024–2026"
       },
       "setup": {
         "title": "Economy — Settings",

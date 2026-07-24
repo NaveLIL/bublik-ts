@@ -55,9 +55,15 @@
     },
     "br": {
       "description": "Справочник техники War Thunder по боевым рейтингам"
+    },
+    "minecraft": {
+      "description": "Интеграция с Minecraft-сервером EREZCRAFT (Мониторинг, Онлайн, Аккаунты)"
     }
   },
   "commands": {
+    "mc": {
+      "description": "🎮 Команды модуля Minecraft (EREZCRAFT)"
+    },
     "info": {
       "description": "Открыть информационную панель бота"
     },
@@ -75,7 +81,8 @@
     "reload": {
       "description": "Перезагрузить модуль без перезапуска",
       "success": "✅ Модуль **{module}** перезагружен за **{time}мс**",
-      "error": "❌ Не удалось перезагрузить модуль **{module}**"
+      "error": "❌ Не удалось перезагрузить модуль **{module}**",
+      "self_error": "❌ Модуль **general** содержит /reload и не может безопасно перезагрузить сам себя. Вместо этого перезапустите бота."
     },
     "voice": {
       "description": "Управление временными голосовыми каналами (setup/remove/list)"
@@ -191,7 +198,7 @@
     "transfer_received": "**Получено:** {amount}",
     "leaderboard_title": "Лидерборд — {guild}",
     "leaderboard_empty": "Пока никто не заработал ни шекеля!",
-    "leaderboard_footer": "Страница {page}/{total} • © NaveL for EREZ 2024–2026",
+    "leaderboard_footer": "Страница {page}/{total} • © NaveLIL for EREZ 2024–2026",
     "locked": "Подождите, предыдущая операция ещё выполняется…",
     "setup_title": "Экономика — Настройки",
     "setup_guild": "**Гильдия:** {name}",
@@ -738,7 +745,7 @@
       "leaderboard": {
         "title": "Лидерборд — {guildName}",
         "empty": "Пока никто не заработал ни шекеля!",
-        "footer": "Страница {page}/{total} • © NaveL for EREZ 2024–2026"
+        "footer": "Страница {page}/{total} • © NaveLIL for EREZ 2024–2026"
       },
       "setup": {
         "title": "Экономика — Настройки",
