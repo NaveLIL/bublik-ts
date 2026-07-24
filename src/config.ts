@@ -44,8 +44,8 @@ export const Config = {
 
   // ── Meta ───────────────────────────────────
   botName: 'Bublik',
-  botAuthor: 'NaveLIL',
-  footer: '© NaveLIL for EREZ 2024–2026',
+  botAuthor: 'NaveL',
+  footer: '© NaveL for EREZ 2024–2026',
   nodeEnv: env('NODE_ENV', 'development'),
 
   get isDev(): boolean {

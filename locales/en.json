@@ -198,7 +198,7 @@
     "transfer_received": "**Received:** {amount}",
     "leaderboard_title": "Leaderboard — {guild}",
     "leaderboard_empty": "Nobody has earned a single shekel yet!",
-    "leaderboard_footer": "Page {page}/{total} • © NaveLIL for EREZ 2024–2026",
+    "leaderboard_footer": "Page {page}/{total} • © NaveL for EREZ 2024–2026",
     "locked": "Please wait, the previous operation is still processing…",
     "setup_title": "Economy — Settings",
     "setup_guild": "**Guild:** {name}",
@@ -745,7 +745,7 @@
       "leaderboard": {
         "title": "Leaderboard — {guildName}",
         "empty": "Nobody has earned a single shekel yet!",
-        "footer": "Page {page}/{total} • © NaveLIL for EREZ 2024–2026"
+        "footer": "Page {page}/{total} • © NaveL for EREZ 2024–2026"
       },
       "setup": {
         "title": "Economy — Settings",

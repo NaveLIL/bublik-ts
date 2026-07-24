@@ -10,7 +10,7 @@ const generalModule: BublikModule = {
   name: 'general',
   descriptionKey: 'modules.general.description',
   version: '1.0.0',
-  author: 'NaveLIL',
+  author: 'NaveL',
 
   commands: [pingCommand, reloadCommand, languageCommand, helpCommand, setupCommand, whitelistCommand],
 

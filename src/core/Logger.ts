@@ -163,7 +163,7 @@ export class Logger {
       '',
       `${colors.bold}${colors.green}  ╔══════════════════════════════════════╗${colors.reset}`,
       `${colors.bold}${colors.green}  ║         🥯  B U B L I K  Bot        ║${colors.reset}`,
-      `${colors.bold}${colors.green}  ║      by NaveLIL  •  for EREZ        ║${colors.reset}`,
+      `${colors.bold}${colors.green}  ║        by NaveL  •  for EREZ        ║${colors.reset}`,
       `${colors.bold}${colors.green}  ╚══════════════════════════════════════╝${colors.reset}`,
       '',
     ];

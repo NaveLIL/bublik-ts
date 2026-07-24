@@ -6,7 +6,7 @@ const minecraftModule: BublikModule = {
   name: 'minecraft',
   descriptionKey: 'modules.minecraft.description',
   version: '1.0.0',
-  author: 'NaveLIL',
+  author: 'NaveL',
 
   commands: [mcCommand],
 
