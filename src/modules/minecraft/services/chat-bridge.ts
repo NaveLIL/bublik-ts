@@ -31,8 +31,14 @@ export async function startChatBridge(client: Client): Promise<void> {
 
     try {
       const configs = await getAllMinecraftConfigs();
+      const chatChannels = configs.map((c) => c.chatChannelId).filter(Boolean);
+      log.info(`[ChatBridge] Discord message in channel ${msg.channelId}, expected: [${chatChannels.join(', ')}]`);
+
       const config = configs.find((c) => c.chatChannelId === msg.channelId);
-      if (!config) return;
+      if (!config) {
+        log.info(`[ChatBridge] Channel ${msg.channelId} is not a MC chat channel, ignoring`);
+        return;
+      }
 
       // Format: <DiscordNick> message
       const nick = msg.member?.displayName ?? msg.author.username;

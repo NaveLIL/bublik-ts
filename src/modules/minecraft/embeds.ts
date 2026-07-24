@@ -237,10 +237,11 @@ export function buildMinecraftVoiceEmbed(): BublikEmbed {
 // ── Phase 3 Embeds ─────────────────────────────
 
 export const SHOP_CATEGORIES = [
-  { id: 'resources', label: '💎 Ресурсы & Валюта', emoji: '💎' },
-  { id: 'equipment', label: '🛡️ Броня & Оружие', emoji: '🛡️' },
-  { id: 'create', label: '⚙️ Create Моды & Инженерия', emoji: '⚙️' },
-  { id: 'god_tier', label: '💥 Божественные & OP Предметы', emoji: '👑' },
+  { id: 'resources', label: 'Ресурсы & Валюта', emoji: '💎' },
+  { id: 'equipment', label: 'Броня & Оружие', emoji: '🛡️' },
+  { id: 'create', label: 'Create Моды & Инженерия', emoji: '⚙️' },
+  { id: 'mods', label: 'Другие Моды', emoji: '🔮' },
+  { id: 'god_tier', label: 'Божественные & OP Предметы', emoji: '👑' },
 ];
 
 export function buildMinecraftShopEmbed(
@@ -256,7 +257,7 @@ export function buildMinecraftShopEmbed(
     .setTitle('🛒 Магазин EREZCRAFT | Покупки за Шекели ₪')
     .setDescription(
       `💰 **Ваш баланс:** **\`${userWallet.toLocaleString()}\`** ₪\n\n` +
-      `📌 **Категория:** ${categoryObj.label}\n` +
+      `📌 **Категория:** ${categoryObj.emoji} ${categoryObj.label}\n` +
       `Переключайте категории и покупайте предметы **в 1 клик** через выпадающее меню ниже!\n` +
       `──────────────────────────────────────────`
     );
