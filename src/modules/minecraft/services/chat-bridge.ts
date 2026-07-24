@@ -106,14 +106,14 @@ async function pollMinecraftChat(client: Client): Promise<void> {
           });
 
           if (!account) {
-            const tellraw = `tellraw ${targetUsername} '["",{"text":"⚠️ [EREZCRAFT] Ваш аккаунт не привязан к Discord! Привяжите командой /link","color":"red"}]'`;
+            const tellraw = `tellraw ${targetUsername} ["",{"text":"⚠️ [EREZCRAFT] Ваш аккаунт не привязан к Discord! Привяжите командой /link","color":"red"}]`;
             await executeRconCommand(tellraw).catch(() => {});
           } else {
             const profile = await db.economyProfile.findUnique({
               where: { guildId_userId: { guildId: account.guildId, userId: account.discordId } },
             });
             const wallet = profile?.wallet ?? 0;
-            const tellraw = `tellraw ${targetUsername} '["",{"text":"₪ [EREZCRAFT] Баланс: ","color":"gold"},{"text":"${wallet} ₪","color":"green","bold":true},{"text":" (Шекелей). Магазин: /mc shop в Discord","color":"gray"}]'`;
+            const tellraw = `tellraw ${targetUsername} ["",{"text":"₪ [EREZCRAFT] Баланс: ","color":"gold"},{"text":"${wallet} ₪","color":"green","bold":true},{"text":" (Шекелей). Магазин: /mc shop в Discord","color":"gray"}]`;
             await executeRconCommand(tellraw).catch(() => {});
           }
         } catch (err) {
