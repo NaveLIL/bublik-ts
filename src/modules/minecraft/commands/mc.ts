@@ -17,6 +17,7 @@ import {
   buildMinecraftModpackEmbed,
   buildMinecraftVoiceEmbed,
   buildMinecraftShopEmbed,
+  buildMinecraftShopComponents,
   buildMinecraftPurchaseReceiptEmbed,
 } from '../embeds';
 import {
@@ -266,8 +267,9 @@ const mcCommand: BublikCommand = {
       });
       const userWallet = profile?.wallet ?? 0;
       const items = await getMinecraftShopItems(guildId);
-      const embed = buildMinecraftShopEmbed(items, userWallet);
-      await interaction.editReply({ embeds: [embed] });
+      const embed = buildMinecraftShopEmbed(items, userWallet, 'resources');
+      const components = buildMinecraftShopComponents(items, 'resources');
+      await interaction.editReply({ embeds: [embed], components });
       return;
     }
 

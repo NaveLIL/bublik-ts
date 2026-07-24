@@ -286,43 +286,134 @@ export async function createMinecraftShopItem(
 export async function seedDefaultMinecraftShopItems(guildId: string): Promise<MinecraftShopItemData[]> {
   const db = getDatabase();
   const defaults = [
+    // --- Resources ---
     {
       guildId,
-      name: '💎 Набор Алмазов (5 шт)',
+      name: '💎 Набор Алмазов (16 шт)',
       description: 'Чистейшие драгоценные алмазы для крафта инструментов',
-      priceShekels: 100,
-      rconCommand: 'give {username} minecraft:diamond 5',
+      priceShekels: 250,
+      rconCommand: 'give {username} minecraft:diamond 16',
       iconEmoji: '💎',
       category: 'resources',
     },
     {
       guildId,
-      name: '⚙️ Комплект Шестерёнок Create (16 шт)',
-      description: 'Большие и малые шестерни для ваших механизмов Create',
-      priceShekels: 150,
-      rconCommand: 'give {username} create:cogwheel 8 && give {username} create:large_cogwheel 8',
+      name: '🧱 Незеритовые Слитки (4 шт)',
+      description: 'Редчайший незеритовый сплав для улучшения экипировки',
+      priceShekels: 1000,
+      rconCommand: 'give {username} minecraft:netherite_ingot 4',
+      iconEmoji: '🧱',
+      category: 'resources',
+    },
+    {
+      guildId,
+      name: '🌟 Незеритовый Блок (1 шт)',
+      description: 'Массивный блок драгоценнейшего незерита',
+      priceShekels: 3500,
+      rconCommand: 'give {username} minecraft:netherite_block 1',
+      iconEmoji: '🌟',
+      category: 'resources',
+    },
+    {
+      guildId,
+      name: '🍎 Яблоки Бессмертия (8 шт)',
+      description: 'Зачарованные золотые яблоки для битв и восстановления',
+      priceShekels: 2000,
+      rconCommand: 'give {username} minecraft:enchanted_golden_apple 8',
+      iconEmoji: '🍎',
+      category: 'resources',
+    },
+
+    // --- Equipment ---
+    {
+      guildId,
+      name: '🛡️ Незеритовый Комплект Воина',
+      description: 'Полный сет незеритовой брони + незеритовый меч',
+      priceShekels: 2500,
+      rconCommand: 'give {username} minecraft:netherite_helmet 1; give {username} minecraft:netherite_chestplate 1; give {username} minecraft:netherite_leggings 1; give {username} minecraft:netherite_boots 1; give {username} minecraft:netherite_sword 1',
+      iconEmoji: '🛡️',
+      category: 'equipment',
+    },
+    {
+      guildId,
+      name: '🏹 Лук Снайпера (Сила V + Бесконечность)',
+      description: 'Легендарный лук с максимальными чарами на урон и стрелы',
+      priceShekels: 1500,
+      rconCommand: 'give {username} minecraft:bow[minecraft:enchantments={levels:{"minecraft:power":5,"minecraft:infinity":1,"minecraft:unbreaking":3,"minecraft:mending":1}}] 1',
+      iconEmoji: '🏹',
+      category: 'equipment',
+    },
+
+    // --- Create Mod ---
+    {
+      guildId,
+      name: '⚙️ Набор Механика Create (16 шестерен + 16 валов)',
+      description: 'Большие, малые шестерни и валы для вращения кинематики',
+      priceShekels: 200,
+      rconCommand: 'give {username} create:cogwheel 8; give {username} create:large_cogwheel 8; give {username} create:shaft 16',
       iconEmoji: '⚙️',
       category: 'create',
     },
     {
       guildId,
-      name: '🚀 Латунные Слитки Create (8 шт)',
-      description: 'Латунный сплав для продвинутой логистики Create',
-      priceShekels: 200,
-      rconCommand: 'give {username} create:brass_ingot 8',
+      name: '🚀 Латунный Сплав Create (16 шт)',
+      description: 'Высокоточная латунь для логистики и умных воронки',
+      priceShekels: 300,
+      rconCommand: 'give {username} create:brass_ingot 16',
       iconEmoji: '🚀',
       category: 'create',
     },
     {
       guildId,
-      name: '⚡ Корпус Поезда Create (4 шт)',
-      description: 'Специальные корпуса для постройки локомотивов и вагонов',
-      priceShekels: 500,
-      rconCommand: 'give {username} create:railway_casing 4',
+      name: '🔥 Горелка Блейза + Стержни (8 шт)',
+      description: 'Горелка Blaze Burner для супернагрева и варки',
+      priceShekels: 600,
+      rconCommand: 'give {username} create:blaze_burner 1; give {username} minecraft:blaze_rod 8',
+      iconEmoji: '🔥',
+      category: 'create',
+    },
+    {
+      guildId,
+      name: '🚂 Поездной Набор (64 рельсы + 8 корпусов + контроллер)',
+      description: 'Полный комплект для запуска вашего первого поезда',
+      priceShekels: 1200,
+      rconCommand: 'give {username} create:track 64; give {username} create:railway_casing 8; give {username} create:controls 1',
       iconEmoji: '🚂',
       category: 'create',
     },
+
+    // --- God Tier / OP Items ---
+    {
+      guildId,
+      name: '⚔️ Меч Разрушителя (Sharpness X, Looting V)',
+      description: 'Читерский меч со 10-м уровнем Остроты и 5-м Добычи',
+      priceShekels: 15000,
+      rconCommand: 'give {username} minecraft:netherite_sword[minecraft:enchantments={levels:{"minecraft:sharpness":10,"minecraft:looting":5,"minecraft:unbreaking":5,"minecraft:sweeping_edge":3}}] 1',
+      iconEmoji: '⚔️',
+      category: 'god_tier',
+    },
+    {
+      guildId,
+      name: '⛏️ Кирка Богов (Efficiency X, Fortune V, Mending)',
+      description: 'Мгновенное разрушение любых блоков и удвоение руды',
+      priceShekels: 12000,
+      rconCommand: 'give {username} minecraft:netherite_pickaxe[minecraft:enchantments={levels:{"minecraft:efficiency":10,"minecraft:fortune":5,"minecraft:unbreaking":5,"minecraft:mending":1}}] 1',
+      iconEmoji: '⛏️',
+      category: 'god_tier',
+    },
+    {
+      guildId,
+      name: '🛡️ Броня Бессмертия (Protection X, Thorns III)',
+      description: 'Абсолютная непробиваемость от любого урона и монстров',
+      priceShekels: 25000,
+      rconCommand: 'give {username} minecraft:netherite_chestplate[minecraft:enchantments={levels:{"minecraft:protection":10,"minecraft:thorns":3,"minecraft:unbreaking":5,"minecraft:mending":1}}] 1',
+      iconEmoji: '👑',
+      category: 'god_tier',
+    },
   ];
+
+  // Remove existing items and re-seed clean
+  await db.minecraftShopItem.deleteMany({ where: { guildId } });
 
   for (const item of defaults) {
     await db.minecraftShopItem.create({ data: item });

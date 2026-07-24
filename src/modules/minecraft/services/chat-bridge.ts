@@ -43,8 +43,8 @@ export async function startChatBridge(client: Client): Promise<void> {
 
       if (!text.trim()) return;
 
-      // Send as a tellraw with Discord icon prefix (single-quoted JSON payload for MC 1.21.1)
-      const tellraw = `tellraw @a '["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${text}","color":"white"}]'`;
+      // Send as a tellraw with Discord icon prefix (unquoted JSON payload for MC 1.21.1)
+      const tellraw = `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${text}","color":"white"}]`;
       const result = await executeRconCommand(tellraw);
       if (result.success) {
         log.info(`[ChatBridge] Discord → MC: <${nick}> ${text}`);

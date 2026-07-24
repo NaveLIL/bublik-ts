@@ -1,4 +1,9 @@
-import { User } from 'discord.js';
+import {
+  User,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+} from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
 import { MinecraftAccountData, MinecraftShopItemData } from './database';
 
@@ -231,30 +236,100 @@ export function buildMinecraftVoiceEmbed(): BublikEmbed {
 
 // ── Phase 3 Embeds ─────────────────────────────
 
+export const SHOP_CATEGORIES = [
+  { id: 'resources', label: '💎 Ресурсы & Валюта', emoji: '💎' },
+  { id: 'equipment', label: '🛡️ Броня & Оружие', emoji: '🛡️' },
+  { id: 'create', label: '⚙️ Create Моды & Инженерия', emoji: '⚙️' },
+  { id: 'god_tier', label: '💥 Божественные & OP Предметы', emoji: '👑' },
+];
+
 export function buildMinecraftShopEmbed(
   items: MinecraftShopItemData[],
-  userWallet: number
+  userWallet: number,
+  selectedCategory = 'resources'
 ): BublikEmbed {
+  const categoryObj = SHOP_CATEGORIES.find((c) => c.id === selectedCategory) ?? SHOP_CATEGORIES[0];
+  const categoryItems = items.filter((i) => i.category === categoryObj.id);
+
   const embed = new BublikEmbed()
     .info()
     .setTitle('🛒 Магазин EREZCRAFT | Покупки за Шекели ₪')
     .setDescription(
-      `💰 **Ваш баланс:** **\`${userWallet}\`** ₪\n` +
-      `Покупайте ресурсы, компоненты Create и услуги прямо из Discord с мгновенной доставкой на сервер!\n` +
+      `💰 **Ваш баланс:** **\`${userWallet.toLocaleString()}\`** ₪\n\n` +
+      `📌 **Категория:** ${categoryObj.label}\n` +
+      `Переключайте категории и покупайте предметы **в 1 клик** через выпадающее меню ниже!\n` +
       `──────────────────────────────────────────`
     );
 
-  for (const item of items) {
+  if (categoryItems.length === 0) {
     embed.addFields({
-      name: `${item.iconEmoji} ${item.name} — ${item.priceShekels} ₪`,
-      value: `${item.description ?? 'Описание отсутствует'}\n` +
-             `*Команда покупки:* \`/mc buy item_id:${item.id}\``,
-      inline: false,
+      name: '📦 Раздел пуст',
+      value: 'В этой категории пока нет доступных товаров.',
     });
+  } else {
+    for (const item of categoryItems) {
+      embed.addFields({
+        name: `${item.iconEmoji} ${item.name} — ${item.priceShekels.toLocaleString()} ₪`,
+        value: `${item.description ?? 'Описание отсутствует'}\n*Команда:* \`/mc buy item_id:${item.id}\``,
+        inline: false,
+      });
+    }
   }
 
   embed.setTimestamp();
   return embed;
+}
+
+export function buildMinecraftShopComponents(
+  items: MinecraftShopItemData[],
+  selectedCategory = 'resources'
+): ActionRowBuilder<StringSelectMenuBuilder>[] {
+  const categorySelect = new StringSelectMenuBuilder()
+    .setCustomId('mc_shop_category')
+    .setPlaceholder('📁 Переключить категорию магазина...')
+    .addOptions(
+      SHOP_CATEGORIES.map((cat) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(cat.label)
+          .setValue(cat.id)
+          .setEmoji(cat.emoji)
+          .setDefault(cat.id === selectedCategory)
+      )
+    );
+
+  const categoryItems = items.filter((i) => i.category === selectedCategory);
+
+  const itemSelect = new StringSelectMenuBuilder()
+    .setCustomId('mc_shop_buy_select')
+    .setPlaceholder(
+      categoryItems.length > 0
+        ? '⚡ Выберите предмет для покупки в 1 клик...'
+        : '❌ В этой категории нет предметов'
+    )
+    .setDisabled(categoryItems.length === 0);
+
+  if (categoryItems.length > 0) {
+    itemSelect.addOptions(
+      categoryItems.map((item) =>
+        new StringSelectMenuOptionBuilder()
+          .setLabel(item.name.substring(0, 50))
+          .setValue(item.id)
+          .setDescription(`Цена: ${item.priceShekels.toLocaleString()} ₪`)
+          .setEmoji(item.iconEmoji || '📦')
+      )
+    );
+  } else {
+    itemSelect.addOptions(
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Нет предметов')
+        .setValue('none')
+    );
+  }
+
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(categorySelect),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(itemSelect),
+  ];
 }
 
 export function buildMinecraftPurchaseReceiptEmbed(
@@ -264,13 +339,13 @@ export function buildMinecraftPurchaseReceiptEmbed(
 ): BublikEmbed {
   return new BublikEmbed()
     .success()
-    .setTitle(`🎉 Покупка успешно выданa!`)
+    .setTitle(`🎉 Покупка успешно выдана!`)
     .setDescription(
       `### ${item.iconEmoji} **${item.name}**\n\n` +
       `• **Получатель в игре:** \`${username}\`\n` +
-      `• **Списано:** **\`${item.priceShekels}\`** ₪\n` +
-      `• **Остаток на балансе:** **\`${newWallet}\`** ₪\n\n` +
-      `📦 *Предмет отправлен в инвентарь игрока на сервере EREZCRAFT.*`
+      `• **Списано:** **\`${item.priceShekels.toLocaleString()}\`** ₪\n` +
+      `• **Остаток на балансе:** **\`${newWallet.toLocaleString()}\`** ₪\n\n` +
+      `📦 *Предмет отправлен прямо в инвентарь игрока на сервере EREZCRAFT.*`
     )
     .setThumbnail(`https://mc-heads.net/avatar/${username}/128`)
     .setTimestamp();

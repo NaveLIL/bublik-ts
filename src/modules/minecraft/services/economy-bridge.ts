@@ -70,9 +70,16 @@ export async function purchaseMinecraftShopItem(
       return { success: false, reason: result.reason, item, currentWallet: result.currentWallet };
     }
 
-    // Execute delivery RCON command
-    const formattedCommand = item.rconCommand.replace(/{username}/g, account.minecraftUsername);
-    await executeRconCommand(formattedCommand);
+    // Execute delivery RCON command (supports multi-commands separated by ;, && or newline)
+    const commands = item.rconCommand
+      .split(/&&|;|\n/)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
+    for (const cmd of commands) {
+      const formattedCommand = cmd.replace(/{username}/g, account.minecraftUsername);
+      await executeRconCommand(formattedCommand);
+    }
 
     // Send in-game notification
     const announceMsg = `tellraw ${account.minecraftUsername} {"text":"[EREZCRAFT] 🎉 Вам доставлена покупка из Discord: ${item.name}!","color":"green"}`;
