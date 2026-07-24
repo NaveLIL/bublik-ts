@@ -24,17 +24,16 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
 
   if (!metrics.online) {
     embed
-      .setColor(0xe74c3c)
-      .setTitle(`🎮 Статус сервера: ${metrics.address}`)
+      .setColor(0xed4245)
+      .setTitle(`🔴 EREZCRAFT | Сервер недоступен`)
       .setDescription(
-        `🔴 **СЕРВЕР ОФФЛАЙН ИЛИ ПЕРЕЗАПУСКАЕТСЯ**\n\n` +
-        `• **Адрес подключения:** \`${metrics.address}\`\n` +
-        `• **Версия:** NeoForge 1.21.1\n` +
-        `• **Модпак:** Create Ultimate Selection 2 10.8.0\n` +
-        `• **Голосовой чат:** Simple Voice Chat (\`play.erez.pro:25454/UDP\`)\n\n` +
-        `⚠️ *Если идёт плановый рестарт или генерация мира Chunky, сервер вернётся в сеть в течение нескольких минут.*`
+        `### ⚠️ Сервер оффлайн или перезапускается\n\n` +
+        `> **Адрес подключения:** \`${metrics.address}\`\n` +
+        `> **Версия:** NeoForge 1.21.1\n` +
+        `> **Сборка:** Create Ultimate Selection 2 (10.8.0)\n\n` +
+        `*Если идёт плановый рестарт или прогрузка чанков, сервер вернётся в сеть в течение нескольких минут.*`
       )
-      .setFooter({ text: `Обновлено: ${new Date().toLocaleTimeString('ru-RU')} | EREZCRAFT Status` });
+      .setTimestamp();
 
     return embed;
   }
@@ -43,46 +42,44 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
   const mspt = metrics.mspt ?? 14.5;
   const isDegraded = tps < 15.0;
 
-  const statusEmoji = isDegraded ? '🟡' : '🟢';
-  const statusText = isDegraded ? 'Высокая нагрузка' : 'В сети (Стабильно)';
-  const color = isDegraded ? 0xf1c40f : 0x2ecc71;
+  const statusBadge = isDegraded ? '🟡 Высокая нагрузка' : '🟢 В сети (Отлично)';
+  const color = isDegraded ? 0xfee75c : 0x57f287;
 
   const playerText =
     metrics.playerList.length > 0
-      ? metrics.playerList.map((p) => `\`${p}\``).join(', ')
-      : '*Никого в сети*';
+      ? metrics.playerList.map((p) => `\`${p}\``).join(' • ')
+      : '*На сервере сейчас никого нет*';
 
   embed
     .setColor(color)
-    .setTitle(`${statusEmoji} EREZCRAFT — ${statusText}`)
+    .setTitle(`⛏️ EREZCRAFT — Игровой Сервер`)
     .setDescription(
-      `🌐 **Адрес:** \`${metrics.address}\`\n` +
-      `📦 **Версия / Сборка:** NeoForge 1.21.1 | *Create Ultimate Selection 2 10.8.0*\n` +
-      `🎙️ **Voice Chat:** Simple Voice Chat 2.6.21 (\`play.erez.pro:25454/UDP\`)`
+      `**Статус:** ${statusBadge}\n` +
+      `**Адрес для входа:** \`${metrics.address}\``
     )
     .addFields(
       {
-        name: `👥 Игроки онлайн (${metrics.playersOnline}/${metrics.playersMax})`,
-        value: playerText,
+        name: '👥 Игроки онлайн',
+        value: `**${metrics.playersOnline}** из **${metrics.playersMax}**\n${playerText}`,
         inline: false,
       },
       {
-        name: '⚡ TPS / MSPT',
-        value: `**${tps.toFixed(1)}** TPS | **${mspt.toFixed(1)}** mspt`,
+        name: '⚙️ Сборка & Версия',
+        value: `• **Ядро:** NeoForge 1.21.1\n• **Модпак:** Create Ultimate (10.8.0)\n• **Voice:** Simple Voice Chat (2.6.21)`,
         inline: true,
       },
       {
-        name: '🛡️ Защита & Авторизация',
-        value: `Vouch (Argon2id) | FTB Chunks`,
+        name: '⚡ Метрики работы',
+        value: `• **TPS:** \`${tps.toFixed(1)}\` / 20.0\n• **MSPT:** \`${mspt.toFixed(1)}\` ms\n• **Защита:** FTB Chunks`,
         inline: true,
       },
       {
-        name: '🔗 Сетевые туннели',
-        value: `🟢 FRP TCP (25565)\n🟢 Voice UDP (25454)`,
+        name: '🌐 Туннели & Сервисы',
+        value: `🟢 **Game TCP:** \`25565\`\n🟢 **Voice UDP:** \`25454\`\n🟢 **Auth:** Vouch (Argon2id)`,
         inline: true,
       }
     )
-    .setFooter({ text: `Обновлено: ${new Date().toLocaleTimeString('ru-RU')} | EREZCRAFT Monitoring` });
+    .setTimestamp();
 
   return embed;
 }
