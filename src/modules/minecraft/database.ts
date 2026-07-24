@@ -6,6 +6,7 @@ export interface MinecraftConfigData {
   guildId: string;
   statusChannelId: string | null;
   statusMessageId: string | null;
+  chatChannelId: string | null;
   serverAddress: string;
   serverName: string;
   lastStatus: string | null;
@@ -71,6 +72,7 @@ export async function updateMinecraftConfig(
   data: {
     statusChannelId?: string | null;
     statusMessageId?: string | null;
+    chatChannelId?: string | null;
     serverAddress?: string;
     serverName?: string;
     lastStatus?: string | null;
@@ -86,6 +88,7 @@ export async function updateMinecraftConfig(
       guildId,
       statusChannelId: data.statusChannelId ?? null,
       statusMessageId: data.statusMessageId ?? null,
+      chatChannelId: data.chatChannelId ?? null,
       serverAddress: data.serverAddress ?? DEFAULT_SERVER_ADDRESS,
       serverName: data.serverName ?? DEFAULT_SERVER_NAME,
       lastStatus: data.lastStatus ?? null,

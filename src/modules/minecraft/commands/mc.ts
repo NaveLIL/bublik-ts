@@ -160,6 +160,18 @@ const mcCommand: BublikCommand = {
         )
         .addSubcommand((sub) =>
           sub
+            .setName('chat-channel')
+            .setDescription('Канал для кросс-чата Discord ↔ Minecraft (или отключить)')
+            .addChannelOption((opt) =>
+              opt
+                .setName('channel')
+                .setDescription('Канал для трансляции чата (оставьте пустым, чтобы отключить)')
+                .addChannelTypes(ChannelType.GuildText)
+                .setRequired(false)
+            )
+        )
+        .addSubcommand((sub) =>
+          sub
             .setName('shop-add')
             .setDescription('Добавить новый предмет в /mc shop')
             .addStringOption((opt) =>
@@ -381,6 +393,17 @@ const mcCommand: BublikCommand = {
         await updateMinecraftConfig(guildId, { playerRoleId: role.id });
         await interaction.editReply({
           content: `✅ Роль игрока при привязке аккаунта установлена на <@&${role.id}>.`,
+        });
+        return;
+      }
+
+      if (subcommand === 'chat-channel') {
+        const targetChannel = interaction.options.getChannel('channel');
+        await updateMinecraftConfig(guildId, { chatChannelId: targetChannel?.id ?? null });
+        await interaction.editReply({
+          content: targetChannel
+            ? `✅ Кросс-чат (Discord ↔ Minecraft) настроен в канале <#${targetChannel.id}>!\n💡 Сообщения в этом канале будут доставляться игрокам в игру и наоборот.`
+            : `🔇 Кросс-чат отключён.`,
         });
         return;
       }

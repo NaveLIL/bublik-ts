@@ -1023,6 +1023,7 @@ model MinecraftConfig {
   guildId         String    @unique
   statusChannelId String?
   statusMessageId String?
+  chatChannelId   String?   // cross-chat: MC <-> Discord bridge
   serverAddress   String    @default("play.erez.pro:25565")
   serverName      String    @default("EREZCRAFT")
   lastStatus      String?   // online | offline | degraded

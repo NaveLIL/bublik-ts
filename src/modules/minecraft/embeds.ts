@@ -12,6 +12,7 @@ export interface MinecraftServerMetrics {
   playerList: string[];
   tps?: number;
   mspt?: number;
+  pingMs?: number;
   cpuPercent?: number;
   ramUsedMb?: number;
   ramTotalMb?: number;
@@ -41,11 +42,23 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
   }
 
   const tps = metrics.tps ?? 20.0;
-  const mspt = metrics.mspt ?? 14.5;
+  const mspt = metrics.mspt ?? 0;
+  const pingMs = metrics.pingMs;
   const isDegraded = tps < 15.0;
 
   const statusBadge = isDegraded ? '🟡 Высокая нагрузка' : '🟢 В сети (Отлично)';
   const color = isDegraded ? 0xfee75c : 0x57f287;
+
+  // Ping quality indicator
+  let pingText = '—';
+  let pingEmoji = '⚪';
+  if (pingMs !== undefined) {
+    pingText = `${pingMs}ms`;
+    pingEmoji = pingMs < 50 ? '🟢' : pingMs < 120 ? '🟡' : '🔴';
+  }
+
+  // TPS quality bar
+  const tpsBar = tps >= 19.5 ? '█████' : tps >= 17 ? '████░' : tps >= 14 ? '███░░' : tps >= 10 ? '██░░░' : '█░░░░';
 
   const playerText =
     metrics.playerList.length > 0
@@ -71,12 +84,12 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
         inline: true,
       },
       {
-        name: '⚡ Метрики работы',
-        value: `• **TPS:** \`${tps.toFixed(1)}\` / 20.0\n• **MSPT:** \`${mspt.toFixed(1)}\` ms\n• **Защита:** FTB Chunks`,
+        name: '⚡ Стабильность сервера',
+        value: `• **TPS:** \`${tps.toFixed(1)}\` / 20.0 \`${tpsBar}\`\n• **MSPT:** \`${mspt.toFixed(1)}\` ms\n• **Задержка:** ${pingEmoji} \`${pingText}\``,
         inline: true,
       },
       {
-        name: '🌐 Туннели & Сервисы',
+        name: '🌐 Сеть & Сервисы',
         value: `🟢 **Game TCP:** \`25565\`\n🟢 **Voice UDP:** \`25454\`\n🟢 **Auth:** Vouch (Argon2id)`,
         inline: true,
       }
