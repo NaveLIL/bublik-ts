@@ -1,4 +1,6 @@
+import { User } from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
+import { MinecraftAccountData } from './database';
 
 export interface MinecraftServerMetrics {
   online: boolean;
@@ -116,4 +118,100 @@ export function buildMinecraftAlertEmbed(
 
   embed.setTimestamp();
   return embed;
+}
+
+// ── Phase 2 Embeds ─────────────────────────────
+
+export function buildMinecraftLinkEmbed(username: string, code: string): BublikEmbed {
+  return new BublikEmbed()
+    .info()
+    .setTitle('🔑 Привязка аккаунта Minecraft')
+    .setDescription(
+      `### 🎮 Игровой ник: \`${username}\`\n\n` +
+      `Ваш одноразовый код подтверждения:\n` +
+      `# \` ${code} \`\n\n` +
+      `> ⏳ **Срок действия кода:** 10 минут\n` +
+      `> 💡 **Как подтвердить:** Введите команду \`/mc link code:${code}\` в этом дискорд-сервере или отправьте код модерации.`
+    )
+    .setThumbnail(`https://mc-heads.net/avatar/${username}/128`)
+    .setTimestamp();
+}
+
+export function buildMinecraftProfileEmbed(
+  user: User,
+  account: MinecraftAccountData | null
+): BublikEmbed {
+  const embed = new BublikEmbed();
+
+  if (!account || !account.isLinked) {
+    return embed
+      .warning()
+      .setTitle(`🎮 Профиль Minecraft | ${user.username}`)
+      .setDescription(
+        `❌ У этого пользователя **нет привязанного аккаунта Minecraft**.\n\n` +
+        `💡 Используйте команду \`/mc link username:<ник>\` чтобы привязать свой игровой аккаунт.`
+      );
+  }
+
+  const linkedDate = account.linkedAt
+    ? `<t:${Math.floor(account.linkedAt.getTime() / 1000)}:R>`
+    : 'Неизвестно';
+
+  return embed
+    .success()
+    .setTitle(`🎮 Игровой Профиль | ${account.minecraftUsername}`)
+    .setDescription(
+      `**Участник Discord:** <@${account.discordId}>\n` +
+      `**Игровой ник:** \`${account.minecraftUsername}\`\n` +
+      `**Статус привязки:** ✅ Подтверждён\n` +
+      `**Дата привязки:** ${linkedDate}`
+    )
+    .setThumbnail(`https://mc-heads.net/avatar/${account.minecraftUsername}/128`)
+    .setTimestamp();
+}
+
+export function buildMinecraftRulesEmbed(): BublikEmbed {
+  return new BublikEmbed()
+    .info()
+    .setTitle('📜 Правила сервера EREZCRAFT')
+    .setDescription(
+      `### ⚖️ Основные положения и устав сервера\n\n` +
+      `1️⃣ **Честная игра:** Запрещено использование читов, X-Ray, дюпов и авто-кликеров.\n` +
+      `2️⃣ **Приваты & Базы:** Сервер защищён через **FTB Chunks**. Гриферство и воровство на заприваченной территории чужой команды запрещено.\n` +
+      `3️⃣ **Уважение:** Запрещены оскорбления, спам, токсичность и провокации в общем чате.\n` +
+      `4️⃣ **Create & Постройки:** Стройте оптимизированные механизмы Create. В случае сильных лагов админы помогут временно остановить механизм.\n` +
+      `5️⃣ **Торговля:** Разрешён бартер и обмен ресурсами за Шекели ₪.`
+    )
+    .setTimestamp();
+}
+
+export function buildMinecraftModpackEmbed(): BublikEmbed {
+  return new BublikEmbed()
+    .info()
+    .setTitle('📦 Модпак EREZCRAFT | Create Ultimate Selection 2')
+    .setDescription(
+      `### 🛠️ Информация о технической сборке\n\n` +
+      `• **Версия игры:** Minecraft 1.21.1\n` +
+      `• **Загрузчик модов:** NeoForge (v21.1.234)\n` +
+      `• **Основной мод:** *Create Selection 2 v10.8.0*\n` +
+      `• **Доп. сервисы:** Simple Voice Chat, FTB Chunks, Vouch Auth\n\n` +
+      `📥 **Адрес подключения:** \`play.erez.pro:25565\`\n` +
+      `🎙️ **Голосовой чат:** \`play.erez.pro:25454/UDP\``
+    )
+    .setTimestamp();
+}
+
+export function buildMinecraftVoiceEmbed(): BublikEmbed {
+  return new BublikEmbed()
+    .info()
+    .setTitle('🎙️ Голосовой чат (Simple Voice Chat)')
+    .setDescription(
+      `### 🎧 Настройка позиционного voice-чата\n\n` +
+      `На сервере установлена модификация **Simple Voice Chat (2.6.21)**.\n\n` +
+      `• **Серверний порт:** \`play.erez.pro:25454\` (протокол **UDP**)\n` +
+      `• **Клавиша открытия настроек в игре:** \`V\` (по умолчанию)\n` +
+      `• **Микрофон:** Выберите устройство ввода в меню по клавише \`V\`\n\n` +
+      `💡 *Если голосовой чат горит серым или не подключается — убедитесь, что ваш провайдер не блокирует UDP порт 25454.*`
+    )
+    .setTimestamp();
 }

@@ -1027,9 +1027,30 @@ model MinecraftConfig {
   serverName      String    @default("EREZCRAFT")
   lastStatus      String?   // online | offline | degraded
   lastAlertSentAt DateTime?
+  whitelistEnabled Boolean  @default(false)
+  playerRoleId    String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   @@map("minecraft_configs")
+}
+
+model MinecraftAccount {
+  id                String    @id @default(cuid())
+  guildId           String
+  discordId         String
+  minecraftUsername String
+  minecraftUuid     String?
+  linkCode          String?
+  linkCodeExpiresAt DateTime?
+  isLinked          Boolean   @default(false)
+  linkedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([guildId, discordId])
+  @@unique([guildId, minecraftUsername])
+  @@index([guildId, isLinked])
+  @@map("minecraft_accounts")
 }
 

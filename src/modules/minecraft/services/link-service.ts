@@ -1,0 +1,88 @@
+import { GuildMember, User } from 'discord.js';
+import {
+  createLinkCode,
+  confirmAccountLink,
+  unlinkMinecraftAccount,
+  getMinecraftAccountByDiscordId,
+  getMinecraftAccountByUsername,
+  getMinecraftConfig,
+  MinecraftAccountData,
+} from '../database';
+import { logger } from '../../../core/Logger';
+
+const log = logger.child('Minecraft:LinkService');
+
+export function generateRandom6DigitCode(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+export async function requestAccountLink(
+  guildId: string,
+  discordId: string,
+  minecraftUsername: string
+): Promise<{ code: string; expiresAt: Date }> {
+  const code = generateRandom6DigitCode();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  await createLinkCode(guildId, discordId, minecraftUsername, code, expiresAt);
+  log.info(`Сгенерирован код привязки ${code} для ${minecraftUsername} (${discordId})`);
+
+  return { code, expiresAt };
+}
+
+export async function processConfirmLink(
+  guildId: string,
+  member: GuildMember,
+  code: string
+): Promise<{ success: boolean; account?: MinecraftAccountData; reason?: string }> {
+  const result = await confirmAccountLink(guildId, member.id, code);
+
+  if (result.success && result.account) {
+    log.info(`Аккаунт Minecraft ${result.account.minecraftUsername} привязан к ${member.user.tag}`);
+
+    // Assign player role if configured
+    const config = await getMinecraftConfig(guildId);
+    if (config?.playerRoleId) {
+      const role = member.guild.roles.cache.get(config.playerRoleId);
+      if (role) {
+        await member.roles.add(role).catch((err) => {
+          log.warn(`Не удалось выдать роль игрока ${config.playerRoleId}`, err);
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+export async function processUnlinkAccount(
+  guildId: string,
+  member: GuildMember
+): Promise<boolean> {
+  const account = await getMinecraftAccountByDiscordId(guildId, member.id);
+  if (!account) return false;
+
+  const success = await unlinkMinecraftAccount(guildId, member.id);
+  if (success) {
+    log.info(`Аккаунт ${account.minecraftUsername} отвязан от ${member.user.tag}`);
+
+    const config = await getMinecraftConfig(guildId);
+    if (config?.playerRoleId) {
+      const role = member.guild.roles.cache.get(config.playerRoleId);
+      if (role && member.roles.cache.has(role.id)) {
+        await member.roles.remove(role).catch((err) => {
+          log.warn(`Не удалось снять роль игрока ${config.playerRoleId}`, err);
+        });
+      }
+    }
+  }
+
+  return success;
+}
+
+export async function getPlayerProfile(
+  guildId: string,
+  targetUser: User
+): Promise<MinecraftAccountData | null> {
+  return getMinecraftAccountByDiscordId(guildId, targetUser.id);
+}
