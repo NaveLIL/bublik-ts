@@ -38,6 +38,8 @@ export class BublikClient extends Client {
         GatewayIntentBits.GuildMembers,
         GatewayIntentBits.GuildPresences,
         GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,    // Required for MessageCreate events
+        GatewayIntentBits.MessageContent,   // Privileged: required to read message text
       ],
       partials: [
         Partials.GuildMember,
