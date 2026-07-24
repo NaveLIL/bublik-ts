@@ -31,29 +31,67 @@ export async function startChatBridge(client: Client): Promise<void> {
 
     try {
       const configs = await getAllMinecraftConfigs();
-      const chatChannels = configs.map((c) => c.chatChannelId).filter(Boolean);
-      log.info(`[ChatBridge] Discord message in channel ${msg.channelId}, expected: [${chatChannels.join(', ')}]`);
-
       const config = configs.find((c) => c.chatChannelId === msg.channelId);
-      if (!config) {
-        log.info(`[ChatBridge] Channel ${msg.channelId} is not a MC chat channel, ignoring`);
-        return;
-      }
+      if (!config) return;
 
-      // Format: <DiscordNick> message
       const nick = msg.member?.displayName ?? msg.author.username;
-      const text = msg.content
+
+      // Build text content — handle attachments & stickers
+      let text = msg.content
         .replace(/`/g, "'")
         .replace(/"/g, '\\"')
-        .substring(0, 200);
+        .substring(0, 180);
+
+      // Add attachment type indicators
+      if (msg.attachments.size > 0) {
+        const attParts: string[] = [];
+        for (const att of msg.attachments.values()) {
+          const ct = att.contentType ?? '';
+          if (ct.startsWith('image/')) attParts.push('[📷 фото]');
+          else if (ct.startsWith('video/')) attParts.push('[🎥 видео]');
+          else if (ct.startsWith('audio/')) attParts.push('[🎵 аудио]');
+          else attParts.push('[📎 файл]');
+        }
+        text = [text, ...attParts].filter(Boolean).join(' ');
+      }
+
+      // Add sticker indicator
+      if (msg.stickers.size > 0) {
+        text = [text, '[🎭 стикер]'].filter(Boolean).join(' ');
+      }
 
       if (!text.trim()) return;
 
-      // Send as a tellraw with Discord icon prefix (unquoted JSON payload for MC 1.21.1)
-      const tellraw = `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${text}","color":"white"}]`;
+      // Check for reply — show quoted excerpt in MC
+      let replyPart = '';
+      if (msg.reference?.messageId) {
+        try {
+          const replied = await msg.channel.messages.fetch(msg.reference.messageId);
+          if (replied) {
+            const replyAuthor = replied.member?.displayName ?? replied.author.username;
+            const replyText = replied.content
+              .replace(/"/g, '\\"')
+              .replace(/`/g, "'")
+              .substring(0, 40);
+            replyPart = replyText
+              ? `↩ ${replyAuthor}: \\"${replyText}...\\" | `
+              : `↩ ${replyAuthor} | `;
+          }
+        } catch {
+          // Ignore if replied message not found
+        }
+      }
+
+      // Build tellraw payload
+      const tellraw = replyPart
+        ? `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${replyPart}","color":"gray","italic":true},{"text":"${text}","color":"white"}]`
+        : `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${text}","color":"white"}]`;
+
       const result = await executeRconCommand(tellraw);
       if (result.success) {
-        log.info(`[ChatBridge] Discord → MC: <${nick}> ${text}`);
+        log.info(`[ChatBridge] Discord → MC: <${nick}> ${replyPart}${text}`);
+      } else {
+        log.warn(`[ChatBridge] Discord → MC failed: ${result.error}`);
       }
 
     } catch (err) {
