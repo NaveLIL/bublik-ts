@@ -14,7 +14,7 @@ export async function executeRconCommand(
   command: string,
   options?: Partial<RconOptions>
 ): Promise<{ success: boolean; response?: string; error?: string }> {
-  const host = options?.host ?? '100.98.99.103';
+  const host = options?.host ?? '100.74.108.43';
   const port = options?.port ?? 25575;
   const password = options?.password ?? process.env.RCON_PASSWORD ?? '43ee011b247d568a1a623769e2120f0fda70a1fd733a6650';
 
