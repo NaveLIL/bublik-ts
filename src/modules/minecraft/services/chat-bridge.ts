@@ -7,6 +7,7 @@ import type { Client, TextChannel, Message } from 'discord.js';
 import { Events } from 'discord.js';
 import { logger } from '../../../core/Logger';
 import { getAllMinecraftConfigs } from '../database';
+import { getDatabase } from '../../../core/Database';
 import { executeRconCommand } from './rcon-service';
 
 const log = logger.child('Minecraft:ChatBridge');
@@ -89,16 +90,41 @@ async function pollMinecraftChat(client: Client): Promise<void> {
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    for (const config of activeConfigs) {
-      const channel = (await client.channels.fetch(config.chatChannelId!).catch(() => null)) as TextChannel | null;
-      if (!channel || !channel.isTextBased()) continue;
+    for (const line of lines) {
+      // Expected format from KubeJS: "USERNAME|MESSAGE" or "REQUEST_BALANCE|USERNAME"
+      const sep = line.indexOf('|');
+      if (sep < 0) continue;
+      const username = line.substring(0, sep);
+      const message = line.substring(sep + 1);
 
-      for (const line of lines) {
-        // Expected format from KubeJS: "USERNAME|MESSAGE"
-        const sep = line.indexOf('|');
-        if (sep < 0) continue;
-        const username = line.substring(0, sep);
-        const message = line.substring(sep + 1);
+      if (username === 'REQUEST_BALANCE') {
+        const targetUsername = message.trim();
+        try {
+          const db = getDatabase();
+          const account = await db.minecraftAccount.findFirst({
+            where: { minecraftUsername: targetUsername, isLinked: true },
+          });
+
+          if (!account) {
+            const tellraw = `tellraw ${targetUsername} '["",{"text":"⚠️ [EREZCRAFT] Ваш аккаунт не привязан к Discord! Привяжите командой /link","color":"red"}]'`;
+            await executeRconCommand(tellraw).catch(() => {});
+          } else {
+            const profile = await db.economyProfile.findUnique({
+              where: { guildId_userId: { guildId: account.guildId, userId: account.discordId } },
+            });
+            const wallet = profile?.wallet ?? 0;
+            const tellraw = `tellraw ${targetUsername} '["",{"text":"₪ [EREZCRAFT] Баланс: ","color":"gold"},{"text":"${wallet} ₪","color":"green","bold":true},{"text":" (Шекелей). Магазин: /mc shop в Discord","color":"gray"}]'`;
+            await executeRconCommand(tellraw).catch(() => {});
+          }
+        } catch (err) {
+          log.error('[ChatBridge] Error responding to REQUEST_BALANCE', err);
+        }
+        continue;
+      }
+
+      for (const config of activeConfigs) {
+        const channel = (await client.channels.fetch(config.chatChannelId!).catch(() => null)) as TextChannel | null;
+        if (!channel || !channel.isTextBased()) continue;
 
         await channel
           .send({
