@@ -31,7 +31,9 @@ export async function executeRconCommand(
     const response = await rcon.send(cleanCmd);
     await rcon.end();
 
-    log.info(`[RCON] Успешно выполнено: "${cleanCmd}"`);
+    if (cleanCmd !== 'erezcraft_chat_flush') {
+      log.info(`[RCON] Успешно выполнено: "${cleanCmd}"`);
+    }
     return { success: true, response };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
