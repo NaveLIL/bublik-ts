@@ -2477,12 +2477,17 @@ function scheduleSquadDeletion(squad: any, guild: Guild, client: BublikClient): 
     );
     if (!airDeleted || !mainDeleted) {
       log.warn(`Удаление отряда ${squad.id} отложено: Discord cleanup не подтверждён`);
+      scheduleSquadDeletion(squad, guild, client);
       return;
     }
 
     const squadNumber = squad.number;
     if (!isStillAuthorized()) return;
-    if (!(await teardownSquadIntegration(squad, client))) return;
+    if (!(await teardownSquadIntegration(squad, client))) {
+      log.warn(`Удаление отряда ${squad.id} отложено: Teams/Redis teardown не подтверждён`);
+      scheduleSquadDeletion(squad, guild, client);
+      return;
+    }
     if (!isStillAuthorized()) return;
     await deleteSquad(squad.id);
 
@@ -2552,8 +2557,14 @@ export async function restoreSquads(
               'ПБ: главный канал недоступен',
             );
           }
-          if (!externalCleanupComplete) continue;
-          if (!(await teardownSquadIntegration(squad, client))) continue;
+          if (!externalCleanupComplete) {
+            scheduleSquadDeletion(squad, guild, client);
+            continue;
+          }
+          if (!(await teardownSquadIntegration(squad, client))) {
+            scheduleSquadDeletion(squad, guild, client);
+            continue;
+          }
           try {
             await deleteSquad(squad.id);
           } catch (error) {
