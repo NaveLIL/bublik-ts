@@ -1134,6 +1134,15 @@ function postflightCheckDefinitions(schema) {
   ];
 }
 
+function expectedPostflightCheckIds(schema) {
+  return [
+    'hardening_schema_projection',
+    'current_prisma_schema_exact',
+    ...preflightCheckDefinitions(schema).map(({ id }) => id),
+    ...postflightCheckDefinitions(schema).map(({ id }) => id),
+  ];
+}
+
 function postflightCountDefinitions(schema) {
   const table = (name) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
   return ['operation_claims', 'team_poll_votes', 'economy_black_market_deals'].map((name) => ({
@@ -1652,6 +1661,7 @@ module.exports = {
   createPreflightReport,
   createPostflightReport,
   createSnapshot,
+  expectedPostflightCheckIds,
   hardeningSchemaRequirements,
   migrationSpecs,
   parseArguments,

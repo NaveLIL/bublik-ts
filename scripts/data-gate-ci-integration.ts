@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 
 const {
   compareSnapshots,
+  expectedPostflightCheckIds,
 } = require('./snapshot-baseline-data') as {
   compareSnapshots: (before: unknown, after: unknown) => {
     status: string;
@@ -12,6 +13,7 @@ const {
     tableCount: number;
     sequenceCount: number;
   };
+  expectedPostflightCheckIds: (schema: string) => string[];
 };
 
 const root = resolve(__dirname, '..');
@@ -41,8 +43,6 @@ const VACATION_ROLE_SNAPSHOT = '20260721000000_vacation_role_snapshot_seal';
 const MINECRAFT_FOUNDATION = '20260724180000_minecraft_foundation';
 const MINECRAFT_CHAT = '20260724183500_add_chat_channel_id';
 const RUNTIME_SCHEMA_RECONCILIATION = '20260727000000_reconcile_runtime_schema';
-const EXPECTED_POSTFLIGHT_CHECKS = 32;
-
 type CommandResult = SpawnSyncReturns<string>;
 type PostflightReport = {
   status: string;
@@ -212,7 +212,10 @@ function runPostflight(
   const report = parseJsonOutput<PostflightReport>(result, 'postflight', urls);
   assert.equal(report.status, expectedStatus);
   if (expectedStatus === 'ok') {
-    assert.equal(report.checks.length, EXPECTED_POSTFLIGHT_CHECKS);
+    assert.deepEqual(
+      report.checks.map(check => check.id),
+      expectedPostflightCheckIds('public'),
+    );
     assert.ok(report.checks.every(check => check.violations === '0'));
     assert.deepEqual(report.skippedChecks, []);
   } else {

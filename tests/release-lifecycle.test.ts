@@ -23,6 +23,7 @@ const entrypointPath = path.join(repositoryRoot, 'scripts', 'entrypoint.sh');
 const baselineVerifierPath = path.join(repositoryRoot, 'scripts', 'verify-baseline-target.js');
 const exporterPath = path.join(repositoryRoot, 'scripts', 'export-public-distribution.js');
 const publicVerifierPath = path.join(repositoryRoot, 'scripts', 'verify-public-distribution.js');
+const ciWorkflowPath = path.join(repositoryRoot, '.github', 'workflows', 'ci.yml');
 
 const { buildPrismaDiffArguments } = require('../scripts/verify-baseline-target.js') as {
   buildPrismaDiffArguments(): string[];
@@ -120,6 +121,17 @@ test('runtime migration controls fail closed and use only the vendored Prisma CL
   assert.doesNotMatch(dockerfile, /\bRUN\s+npx\s+prisma\b/);
   assert.ok(entrypoint.indexOf('case "$baseline_mode"') < entrypoint.indexOf('applying db schema'));
   assert.ok(entrypoint.indexOf('case "$migrate_only"') < entrypoint.indexOf('applying db schema'));
+});
+
+test('production image postflight derives the exact check contract from the data gate', () => {
+  const workflow = readFileSync(ciWorkflowPath, 'utf8');
+
+  assert.match(workflow, /expectedPostflightCheckIds\(report\.schema\)/);
+  assert.doesNotMatch(workflow, /report\.checks\.length\s*!==\s*\d+/);
+  assert.match(
+    workflow,
+    /JSON\.stringify\(report\.checks\.map\(check=>check\.id\)\)!==JSON\.stringify\(expected\)/,
+  );
 });
 
 test('Prisma drift verification keeps database credentials out of child argv and errors', () => {
