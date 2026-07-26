@@ -1075,4 +1075,3 @@ model MinecraftShopItem {
   @@index([guildId, isActive])
   @@map("minecraft_shop_items")
 }
-
