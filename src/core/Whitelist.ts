@@ -30,7 +30,7 @@ export function initWhitelist(force = false): Promise<void> {
       const db = getDatabase();
       const { list, seeded } = await db.$transaction(async (tx) => {
         let persisted = await tx.allowedGuild.findMany();
-        await tx.operationClaim.createMany({
+        const bootstrapClaim = await tx.operationClaim.createMany({
           data: [{
             key: ENV_BOOTSTRAP_CLAIM,
             scope: 'whitelist_env_bootstrap',
@@ -40,7 +40,11 @@ export function initWhitelist(force = false): Promise<void> {
         });
 
         let didSeed = false;
-        if (Config.allowedGuilds.length > 0) {
+        if (
+          bootstrapClaim.count === 1 &&
+          persisted.length === 0 &&
+          Config.allowedGuilds.length > 0
+        ) {
           const res = await tx.allowedGuild.createMany({
             data: Config.allowedGuilds.map((guildId) => ({ guildId })),
             skipDuplicates: true,
@@ -48,7 +52,8 @@ export function initWhitelist(force = false): Promise<void> {
           didSeed = res.count > 0;
         }
 
-        // Re-read after syncing Config.allowedGuilds
+        // Re-read after the one-time bootstrap. Once the durable claim exists,
+        // the database remains authoritative even when its whitelist is empty.
         persisted = await tx.allowedGuild.findMany();
 
         return { list: persisted, seeded: didSeed };
