@@ -197,7 +197,7 @@ test('target preflight rejects an owned destination junction before touching its
   mkdirSync(external);
   writeFileSync(sentinel, 'must survive\n', 'utf8');
   execFileSync('git', ['init', '--quiet'], { cwd: target, stdio: 'ignore' });
-  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/NaveLIL/bublik-ts.git'], {
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/NaveLIL/bublik-ts-release.git'], {
     cwd: target,
     stdio: 'ignore',
   });
