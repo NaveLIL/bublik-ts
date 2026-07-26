@@ -27,6 +27,7 @@ const requiredPublicFiles = new Set([
   'CHANGELOG.md',
   'CONTRIBUTING.md',
   'Dockerfile',
+  'LICENSE',
   'README.md',
   'SECURITY.md',
   'SUPPORT.md',
