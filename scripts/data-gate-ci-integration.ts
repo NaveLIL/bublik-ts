@@ -38,6 +38,9 @@ const OWNED_DATABASE_NAMES = Object.freeze(Object.values(OWNED_DATABASES));
 const BASELINE = '20260719000000_baseline';
 const HARDENING = '20260719010000_hardening';
 const VACATION_ROLE_SNAPSHOT = '20260721000000_vacation_role_snapshot_seal';
+const MINECRAFT_FOUNDATION = '20260724180000_minecraft_foundation';
+const MINECRAFT_CHAT = '20260724183500_add_chat_channel_id';
+const RUNTIME_SCHEMA_RECONCILIATION = '20260727000000_reconcile_runtime_schema';
 const EXPECTED_POSTFLIGHT_CHECKS = 32;
 
 type CommandResult = SpawnSyncReturns<string>;
@@ -228,7 +231,7 @@ async function readMigrationSteps(targetUrl: string): Promise<Array<[string, num
     }>>(`
       SELECT migration_name, applied_steps_count
       FROM "public"."_prisma_migrations"
-      ORDER BY started_at, id
+      ORDER BY migration_name, started_at, id
     `);
     return rows.map(row => [row.migration_name, Number(row.applied_steps_count)]);
   } finally {
@@ -244,6 +247,9 @@ async function assertMigrationSteps(
     [BASELINE, baselineSteps],
     [HARDENING, 1],
     [VACATION_ROLE_SNAPSHOT, 1],
+    [MINECRAFT_FOUNDATION, 1],
+    [MINECRAFT_CHAT, 1],
+    [RUNTIME_SCHEMA_RECONCILIATION, 1],
   ]);
 }
 

@@ -30,7 +30,7 @@ export function initWhitelist(force = false): Promise<void> {
       const db = getDatabase();
       const { list, seeded } = await db.$transaction(async (tx) => {
         let persisted = await tx.allowedGuild.findMany();
-        const bootstrap = await tx.operationClaim.createMany({
+        await tx.operationClaim.createMany({
           data: [{
             key: ENV_BOOTSTRAP_CLAIM,
             scope: 'whitelist_env_bootstrap',

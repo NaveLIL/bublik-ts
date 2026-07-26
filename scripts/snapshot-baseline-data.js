@@ -317,6 +317,12 @@ const HARDENING_MIGRATION = '20260719010000_hardening';
 const HARDENING_SHA256 = '84f224d922659e966ce1d7cde0cc5aae9327743a8c5b21e3a67cbea624ea0007';
 const VACATION_ROLE_SNAPSHOT_MIGRATION = '20260721000000_vacation_role_snapshot_seal';
 const VACATION_ROLE_SNAPSHOT_SHA256 = '341fab363c466627b908648181245fa24eea8dcd2325f7b5eee253dc50ff0772';
+const MINECRAFT_FOUNDATION_MIGRATION = '20260724180000_minecraft_foundation';
+const MINECRAFT_FOUNDATION_SHA256 = '927706176c284d3c55e6381cfc4d6be27617dc50924134bc3486c7da4fc72531';
+const MINECRAFT_CHAT_MIGRATION = '20260724183500_add_chat_channel_id';
+const MINECRAFT_CHAT_SHA256 = '874634c6be9c31e01328825b691fd339f0dd346f7225662c6eff4e4e0bfa8140';
+const RUNTIME_SCHEMA_RECONCILIATION_MIGRATION = '20260727000000_reconcile_runtime_schema';
+const RUNTIME_SCHEMA_RECONCILIATION_SHA256 = '8b681f2fe62227e7b6c5a45761e87b6d4460f8fe25061e4195400843e815495a';
 const PRISMA_SCHEMA_PATH = resolve(__dirname, '..', 'prisma', 'schema.prisma');
 const MIGRATIONS_PATH = resolve(__dirname, '..', 'prisma', 'migrations');
 
@@ -337,6 +343,21 @@ function migrationSpecs() {
     {
       name: VACATION_ROLE_SNAPSHOT_MIGRATION,
       sha256: VACATION_ROLE_SNAPSHOT_SHA256,
+      appliedStepsCounts: [1],
+    },
+    {
+      name: MINECRAFT_FOUNDATION_MIGRATION,
+      sha256: MINECRAFT_FOUNDATION_SHA256,
+      appliedStepsCounts: [1],
+    },
+    {
+      name: MINECRAFT_CHAT_MIGRATION,
+      sha256: MINECRAFT_CHAT_SHA256,
+      appliedStepsCounts: [1],
+    },
+    {
+      name: RUNTIME_SCHEMA_RECONCILIATION_MIGRATION,
+      sha256: RUNTIME_SCHEMA_RECONCILIATION_SHA256,
       appliedStepsCounts: [1],
     },
   ];
@@ -437,9 +458,13 @@ function validateMigrationHistoryRows(rows) {
     if (previous?.finished_at == null || current?.started_at == null) continue;
     const previousFinished = new Date(previous.finished_at).getTime();
     const currentStarted = new Date(current.started_at).getTime();
+    const isRetrospectiveMinecraftAdoption = (
+      previous.migration_name === MINECRAFT_FOUNDATION_MIGRATION
+      && current.migration_name === MINECRAFT_CHAT_MIGRATION
+    );
     if (!Number.isFinite(previousFinished)
       || !Number.isFinite(currentStarted)
-      || previousFinished > currentStarted) {
+      || (previousFinished > currentStarted && !isRetrospectiveMinecraftAdoption)) {
       differences.push(`migration history is not chronological at prefix position ${index}`);
     }
   }
@@ -840,7 +865,7 @@ async function readHardeningSchemaCheck(tx, schema) {
       SELECT migration_name, checksum, started_at, finished_at, rolled_back_at, logs,
              applied_steps_count
       FROM ${quoteIdentifier(schema)}.${quoteIdentifier('_prisma_migrations')}
-      ORDER BY started_at, id
+      ORDER BY migration_name, started_at, id
     `);
     differences.push(...validateMigrationHistoryRows(migrationRows)
       .filter((difference) => !localMigrationDifferences.includes(difference)));

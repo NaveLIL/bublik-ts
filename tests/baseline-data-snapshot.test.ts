@@ -236,10 +236,22 @@ function validMigrationHistory(baselineSteps: 0 | 1) {
   }));
 }
 
-test('postflight accepts both resolved and freshly-applied baseline history, with hardening at one step', () => {
+test('postflight accepts the complete audited migration history', () => {
   assert.deepEqual(validateLocalMigrationFiles(), []);
   assert.deepEqual(validateMigrationHistoryRows(validMigrationHistory(0)), []);
   assert.deepEqual(validateMigrationHistoryRows(validMigrationHistory(1)), []);
+});
+
+test('postflight accepts retrospective Minecraft foundation adoption on production', () => {
+  const history = validMigrationHistory(0);
+  history[3].started_at = new Date('2026-07-27T00:00:00.000Z');
+  history[3].finished_at = new Date('2026-07-27T00:00:01.000Z');
+  history[4].started_at = new Date('2026-07-24T18:35:00.000Z');
+  history[4].finished_at = new Date('2026-07-24T18:35:01.000Z');
+  history[5].started_at = new Date('2026-07-27T00:00:02.000Z');
+  history[5].finished_at = new Date('2026-07-27T00:00:03.000Z');
+
+  assert.deepEqual(validateMigrationHistoryRows(history), []);
 });
 
 test('postflight migration history rejects unknown, reordered, rolled-back and modified rows', () => {
@@ -258,7 +270,7 @@ test('postflight migration history rejects unknown, reordered, rolled-back and m
     applied_steps_count: 0,
   });
   const differences = validateMigrationHistoryRows(damaged).join('\n');
-  assert.match(differences, /expected exactly 3/);
+  assert.match(differences, /expected exactly 6/);
   assert.match(differences, /unknown migration history row/);
   assert.match(differences, /rolled-back migration history row is forbidden/);
   assert.match(differences, /unfinished migration history row/);

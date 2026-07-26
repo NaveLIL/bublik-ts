@@ -5,7 +5,6 @@ import {
   forceLinkMinecraftAccount,
   unlinkMinecraftAccount,
   getMinecraftAccountByDiscordId,
-  getMinecraftAccountByUsername,
   getMinecraftConfig,
   MinecraftAccountData,
 } from '../database';

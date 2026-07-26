@@ -180,7 +180,7 @@ async function pollMinecraftChat(client: Client): Promise<void> {
         log.info(`[ChatBridge] MC → Discord: <${username}> ${message}`);
       }
     }
-  } catch (err) {
+  } catch {
     // Silently ignore polling errors (server may be offline)
   }
 }

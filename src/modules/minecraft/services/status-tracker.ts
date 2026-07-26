@@ -249,7 +249,7 @@ export async function pingMinecraftServer(host: string, port: number = 25565, ti
             pingMs,
           });
         }
-      } catch (err) {
+      } catch {
         // Parsing error or partial payload
       }
     });
