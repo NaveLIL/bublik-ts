@@ -9,8 +9,11 @@ import { logger } from '../../../core/Logger';
 import { getAllMinecraftConfigs } from '../database';
 import { getDatabase } from '../../../core/Database';
 import { executeRconCommand } from './rcon-service';
+import { isValidMinecraftJavaUsername } from './link-service';
 
 const log = logger.child('Minecraft:ChatBridge');
+const CHAT_POLL_BASE_DELAY_MS = 3_000;
+const CHAT_POLL_MAX_DELAY_MS = 5 * 60_000;
 
 // --- Polling: MC logs → Discord ---
 // We poll RCON for chat output by using KubeJS-written file via a dedicated
@@ -18,28 +21,100 @@ const log = logger.child('Minecraft:ChatBridge');
 // and we read it via exec on game-host. For now, Discord → MC is implemented
 // fully; MC → Discord requires the KubeJS chat hook file polling (see below).
 
-let bridgeInterval: NodeJS.Timeout | null = null;
-let discordMessageListener: ((...args: unknown[]) => void) | null = null;
+export type ChatPollResult = 'success' | 'failure' | 'idle';
 
-export async function startChatBridge(client: Client): Promise<void> {
+export interface ChatBridgeOptions {
+  poll?: (client: Client) => Promise<ChatPollResult>;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+}
+
+interface ChatBridgeRuntime {
+  client: Client;
+  discordMessageListener: (...args: unknown[]) => void;
+  poll: (client: Client) => Promise<ChatPollResult>;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  timer: NodeJS.Timeout | null;
+  stopped: boolean;
+  pollInFlight: boolean;
+  consecutiveFailures: number;
+}
+
+let bridgeRuntime: ChatBridgeRuntime | null = null;
+let lastRoutingWarningKey: string | null = null;
+
+export function getChatPollDelayMs(
+  consecutiveFailures: number,
+  baseDelayMs = CHAT_POLL_BASE_DELAY_MS,
+  maxDelayMs = CHAT_POLL_MAX_DELAY_MS
+): number {
+  const safeFailures = Math.max(0, Math.floor(consecutiveFailures));
+  const exponent = Math.min(safeFailures, 20);
+  return Math.min(maxDelayMs, baseDelayMs * (2 ** exponent));
+}
+
+export function selectMinecraftChatConfig<T extends {
+  guildId: string;
+  chatChannelId: string | null;
+}>(
+  configs: readonly T[],
+  preferredGuildId: string | null = process.env.MINECRAFT_GUILD_ID?.trim() || null
+): T | null {
+  const activeConfigs = configs.filter((config) => config.chatChannelId);
+  if (activeConfigs.length === 0) return null;
+
+  if (preferredGuildId) {
+    return activeConfigs.find((config) => config.guildId === preferredGuildId) ?? null;
+  }
+
+  return activeConfigs.length === 1 ? activeConfigs[0] : null;
+}
+
+export function buildDiscordTellrawCommand(
+  nickname: string,
+  text: string,
+  replyContext = ''
+): string {
+  const components: Array<string | Record<string, string | boolean>> = [
+    '',
+    { text: '💬 [Discord] ', color: 'blue' },
+    { text: nickname, color: 'aqua', bold: true },
+    { text: ' » ', color: 'dark_gray' },
+  ];
+  if (replyContext) {
+    components.push({ text: replyContext, color: 'gray', italic: true });
+  }
+  components.push({ text, color: 'white' });
+  return `tellraw @a ${JSON.stringify(components)}`;
+}
+
+export async function startChatBridge(
+  client: Client,
+  options: ChatBridgeOptions = {}
+): Promise<void> {
   stopChatBridge();
 
   // --- Discord → Minecraft ---
-  discordMessageListener = async (...args: unknown[]) => {
+  const discordMessageListener = async (...args: unknown[]) => {
     const msg = args[0] as Message;
     if (msg.author.bot) return;
+    if (!msg.guildId) return;
 
     try {
       const configs = await getAllMinecraftConfigs();
-      const config = configs.find((c) => c.chatChannelId === msg.channelId);
-      if (!config) return;
+      const config = selectMinecraftChatConfig(configs);
+      if (
+        !config
+        || config.guildId !== msg.guildId
+        || config.chatChannelId !== msg.channelId
+      ) return;
 
       const nick = msg.member?.displayName ?? msg.author.username;
 
       // Build text content — handle attachments & stickers
       let text = msg.content
         .replace(/`/g, "'")
-        .replace(/"/g, '\\"')
         .substring(0, 180);
 
       // Add attachment type indicators
@@ -70,11 +145,10 @@ export async function startChatBridge(client: Client): Promise<void> {
           if (replied) {
             const replyAuthor = replied.member?.displayName ?? replied.author.username;
             const replyText = replied.content
-              .replace(/"/g, '\\"')
               .replace(/`/g, "'")
               .substring(0, 40);
             replyPart = replyText
-              ? `↩ ${replyAuthor}: \\"${replyText}...\\" | `
+              ? `↩ ${replyAuthor}: "${replyText}…" | `
               : `↩ ${replyAuthor} | `;
           }
         } catch {
@@ -83,9 +157,7 @@ export async function startChatBridge(client: Client): Promise<void> {
       }
 
       // Build tellraw payload
-      const tellraw = replyPart
-        ? `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${replyPart}","color":"gray","italic":true},{"text":"${text}","color":"white"}]`
-        : `tellraw @a ["",{"text":"💬 [Discord] ","color":"blue"},{"text":"${nick}","color":"aqua","bold":true},{"text":" » ","color":"dark_gray"},{"text":"${text}","color":"white"}]`;
+      const tellraw = buildDiscordTellrawCommand(nick, text, replyPart);
 
       const result = await executeRconCommand(tellraw);
       if (result.success) {
@@ -101,33 +173,126 @@ export async function startChatBridge(client: Client): Promise<void> {
 
   client.on(Events.MessageCreate, discordMessageListener as Parameters<typeof client.on>[1]);
 
+  const runtime: ChatBridgeRuntime = {
+    client,
+    discordMessageListener,
+    poll: options.poll ?? pollMinecraftChat,
+    baseDelayMs: options.baseDelayMs ?? CHAT_POLL_BASE_DELAY_MS,
+    maxDelayMs: options.maxDelayMs ?? CHAT_POLL_MAX_DELAY_MS,
+    timer: null,
+    stopped: false,
+    pollInFlight: false,
+    consecutiveFailures: 0,
+  };
+  bridgeRuntime = runtime;
+
   // --- Minecraft → Discord: poll the RCON chat queue file ---
-  bridgeInterval = setInterval(async () => {
-    await pollMinecraftChat(client);
-  }, 3000); // every 3 seconds
+  scheduleNextPoll(runtime, runtime.baseDelayMs);
 
   log.info('Кросс-чат мост запущен (Discord ↔ Minecraft)');
 }
 
 export function stopChatBridge(): void {
-  if (bridgeInterval) {
-    clearInterval(bridgeInterval);
-    bridgeInterval = null;
+  const runtime = bridgeRuntime;
+  bridgeRuntime = null;
+  lastRoutingWarningKey = null;
+
+  if (runtime) {
+    runtime.stopped = true;
+    if (runtime.timer) {
+      clearTimeout(runtime.timer);
+      runtime.timer = null;
+    }
+    runtime.client.off(
+      Events.MessageCreate,
+      runtime.discordMessageListener as Parameters<typeof runtime.client.off>[1]
+    );
   }
-  discordMessageListener = null;
+
   log.info('Кросс-чат мост остановлен');
 }
 
+function scheduleNextPoll(runtime: ChatBridgeRuntime, delayMs: number): void {
+  if (runtime.stopped || bridgeRuntime !== runtime) return;
+
+  runtime.timer = setTimeout(() => {
+    runtime.timer = null;
+    void runScheduledPoll(runtime);
+  }, delayMs);
+}
+
+async function runScheduledPoll(runtime: ChatBridgeRuntime): Promise<void> {
+  if (runtime.stopped || bridgeRuntime !== runtime || runtime.pollInFlight) return;
+
+  runtime.pollInFlight = true;
+  let result: ChatPollResult = 'failure';
+
+  try {
+    result = await runtime.poll(runtime.client);
+  } catch (error) {
+    log.warn('[ChatBridge] Непредвиденная ошибка планировщика Minecraft-чата', error);
+  } finally {
+    runtime.pollInFlight = false;
+  }
+
+  if (runtime.stopped || bridgeRuntime !== runtime) return;
+
+  if (result === 'failure') {
+    runtime.consecutiveFailures += 1;
+  } else {
+    runtime.consecutiveFailures = 0;
+  }
+
+  const nextDelay = getChatPollDelayMs(
+    runtime.consecutiveFailures,
+    runtime.baseDelayMs,
+    runtime.maxDelayMs
+  );
+  if (
+    result === 'failure'
+    && (
+      runtime.consecutiveFailures === 1
+      || (runtime.consecutiveFailures & (runtime.consecutiveFailures - 1)) === 0
+    )
+  ) {
+    log.warn(
+      `[ChatBridge] erezcraft_chat_flush недоступен; следующая попытка через ${Math.ceil(nextDelay / 1000)} сек. `
+      + `(ошибок подряд: ${runtime.consecutiveFailures})`
+    );
+  }
+
+  scheduleNextPoll(runtime, nextDelay);
+}
+
 // Read chat queue written by KubeJS to a tmp file via RCON exec trick
-async function pollMinecraftChat(client: Client): Promise<void> {
+async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
   try {
     const configs = await getAllMinecraftConfigs();
-    const activeConfigs = configs.filter((c) => c.chatChannelId);
-    if (activeConfigs.length === 0) return;
+    const activeConfigs = configs.filter((config) => config.chatChannelId);
+    if (activeConfigs.length === 0) return 'idle';
+
+    const config = selectMinecraftChatConfig(activeConfigs);
+    if (!config) {
+      const warningKey = [
+        process.env.MINECRAFT_GUILD_ID?.trim() || 'unset',
+        ...activeConfigs.map((candidate) => candidate.guildId).sort(),
+      ].join(':');
+
+      if (lastRoutingWarningKey !== warningKey) {
+        lastRoutingWarningKey = warningKey;
+        log.error(
+          '[ChatBridge] MC → Discord остановлен: настроено несколько чат-каналов. '
+          + 'Укажите MINECRAFT_GUILD_ID владельца RCON-сервера, чтобы исключить утечку сообщений между серверами.'
+        );
+      }
+      return 'idle';
+    }
+    lastRoutingWarningKey = null;
 
     // Use RCON to read & flush the chat queue file
     const readResult = await executeRconCommand('erezcraft_chat_flush');
-    if (!readResult.success || !readResult.response?.trim()) return;
+    if (!readResult.success) return 'failure';
+    if (!readResult.response?.trim()) return 'success';
 
     const lines = readResult.response
       .split('\n')
@@ -143,13 +308,22 @@ async function pollMinecraftChat(client: Client): Promise<void> {
 
       if (username === 'REQUEST_BALANCE') {
         const targetUsername = message.trim();
+        if (!isValidMinecraftJavaUsername(targetUsername)) {
+          log.warn('[ChatBridge] Отклонён некорректный Minecraft-ник в REQUEST_BALANCE');
+          continue;
+        }
         try {
           const db = getDatabase();
-          const account = await db.minecraftAccount.findFirst({
-            where: { minecraftUsername: targetUsername, isLinked: true },
+          const account = await db.minecraftAccount.findUnique({
+            where: {
+              guildId_minecraftUsername: {
+                guildId: config.guildId,
+                minecraftUsername: targetUsername,
+              },
+            },
           });
 
-          if (!account) {
+          if (!account?.isLinked) {
             const tellraw = `tellraw ${targetUsername} ["",{"text":"⚠️ [EREZCRAFT] Ваш аккаунт не привязан к Discord! Привяжите командой /link","color":"red"}]`;
             await executeRconCommand(tellraw).catch(() => {});
           } else {
@@ -166,21 +340,21 @@ async function pollMinecraftChat(client: Client): Promise<void> {
         continue;
       }
 
-      for (const config of activeConfigs) {
-        const channel = (await client.channels.fetch(config.chatChannelId!).catch(() => null)) as TextChannel | null;
-        if (!channel || !channel.isTextBased()) continue;
+      const channel = (await client.channels.fetch(config.chatChannelId!).catch(() => null)) as TextChannel | null;
+      if (!channel || !channel.isTextBased()) continue;
 
-        await channel
-          .send({
-            content: `🎮 **${username}**: ${message}`,
-            allowedMentions: { parse: [] },
-          })
-          .catch(() => {});
+      await channel
+        .send({
+          content: `🎮 **${username.slice(0, 64)}**: ${message.slice(0, 1_800)}`,
+          allowedMentions: { parse: [] },
+        })
+        .catch(() => {});
 
-        log.info(`[ChatBridge] MC → Discord: <${username}> ${message}`);
-      }
+      log.info(`[ChatBridge] MC → Discord: <${username}> ${message}`);
     }
-  } catch {
-    // Silently ignore polling errors (server may be offline)
+    return 'success';
+  } catch (error) {
+    log.warn('[ChatBridge] Ошибка опроса Minecraft-чата', error);
+    return 'failure';
   }
 }

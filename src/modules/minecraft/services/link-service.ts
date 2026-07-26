@@ -1,7 +1,6 @@
 import { GuildMember, User } from 'discord.js';
 import {
   createLinkCode,
-  confirmAccountLink,
   forceLinkMinecraftAccount,
   unlinkMinecraftAccount,
   getMinecraftAccountByDiscordId,
@@ -11,6 +10,36 @@ import {
 import { logger } from '../../../core/Logger';
 
 const log = logger.child('Minecraft:LinkService');
+const MINECRAFT_JAVA_USERNAME_PATTERN = /^[A-Za-z0-9_]{3,16}$/;
+const LINK_CODE_PATTERN = /^\d{6}$/;
+
+export function isValidMinecraftJavaUsername(username: string): boolean {
+  return MINECRAFT_JAVA_USERNAME_PATTERN.test(username);
+}
+
+export type MinecraftLinkVerificationDecision =
+  | { verified: true }
+  | { verified: false; reason: string };
+
+export function interpretMinecraftLinkVerification(
+  result: { success: boolean; response?: string } | null | undefined
+): MinecraftLinkVerificationDecision {
+  if (!result?.success) {
+    return { verified: false, reason: 'RCON_UNAVAILABLE' };
+  }
+
+  const response = result.response?.trim();
+  if (response === 'VERIFIED') {
+    return { verified: true };
+  }
+  if (response === 'EXPIRED') {
+    return { verified: false, reason: 'CODE_EXPIRED' };
+  }
+  if (response === 'INVALID_CODE') {
+    return { verified: false, reason: 'INVALID_CODE' };
+  }
+  return { verified: false, reason: 'VERIFICATION_FAILED' };
+}
 
 export function generateRandom6DigitCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -21,11 +50,15 @@ export async function requestAccountLink(
   discordId: string,
   minecraftUsername: string
 ): Promise<{ code: string; expiresAt: Date }> {
+  if (!isValidMinecraftJavaUsername(minecraftUsername)) {
+    throw new Error('INVALID_MINECRAFT_USERNAME');
+  }
+
   const code = generateRandom6DigitCode();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
   await createLinkCode(guildId, discordId, minecraftUsername, code, expiresAt);
-  log.info(`Сгенерирован код привязки ${code} для ${minecraftUsername} (${discordId})`);
+  log.info(`Сгенерирован код привязки для ${minecraftUsername} (${discordId})`);
 
   return { code, expiresAt };
 }
@@ -36,55 +69,65 @@ export async function processConfirmLink(
   guildId: string,
   member: GuildMember,
   code: string,
-  username?: string
+  username: string
 ): Promise<{ success: boolean; account?: MinecraftAccountData; reason?: string }> {
-  // If username is provided, try in-game RCON verification first
-  if (username) {
-    const rconResult = await executeRconCommand(`erezcraft_verify_code ${username} ${code}`).catch(() => null);
-    if (rconResult?.success && rconResult.response) {
-      const resp = rconResult.response.trim();
-      if (resp === 'VERIFIED') {
-        const account = await forceLinkMinecraftAccount(guildId, member.id, username);
-        log.info(`Аккаунт Minecraft ${username} привязан к ${member.user.tag} (подтверждено в игре)`);
+  if (!isValidMinecraftJavaUsername(username)) {
+    return { success: false, reason: 'INVALID_USERNAME' };
+  }
 
-        // Assign player role if configured
-        const config = await getMinecraftConfig(guildId);
-        if (config?.playerRoleId) {
-          const role = member.guild.roles.cache.get(config.playerRoleId);
-          if (role) {
-            await member.roles.add(role).catch((err) => {
-              log.warn(`Не удалось выдать роль игрока ${config.playerRoleId}`, err);
-            });
-          }
-        }
-        return { success: true, account };
-      } else if (resp === 'EXPIRED') {
-        return { success: false, reason: 'CODE_EXPIRED' };
-      } else if (resp === 'INVALID_CODE') {
-        return { success: false, reason: 'INVALID_CODE' };
-      }
+  if (!LINK_CODE_PATTERN.test(code)) {
+    return { success: false, reason: 'INVALID_CODE' };
+  }
+
+  // The database record identifies the Discord user and the exact pending
+  // username, but it is never sufficient to confirm ownership by itself.
+  const pending = await getMinecraftAccountByDiscordId(guildId, member.id);
+  if (!pending) {
+    return { success: false, reason: 'NOT_FOUND' };
+  }
+  if (pending.isLinked) {
+    return { success: false, reason: 'ALREADY_LINKED' };
+  }
+  if (pending.minecraftUsername.toLowerCase() !== username.toLowerCase()) {
+    return { success: false, reason: 'USERNAME_MISMATCH' };
+  }
+  if (pending.linkCode !== code) {
+    return { success: false, reason: 'INVALID_CODE' };
+  }
+  if (pending.linkCodeExpiresAt && pending.linkCodeExpiresAt < new Date()) {
+    return { success: false, reason: 'CODE_EXPIRED' };
+  }
+
+  const rconResult = await executeRconCommand(
+    `erezcraft_verify_code ${pending.minecraftUsername} ${code}`
+  ).catch(() => null);
+
+  const verification = interpretMinecraftLinkVerification(rconResult);
+  if (!verification.verified) {
+    return { success: false, reason: verification.reason };
+  }
+
+  const account = await forceLinkMinecraftAccount(
+    guildId,
+    member.id,
+    pending.minecraftUsername
+  );
+  log.info(
+    `Аккаунт Minecraft ${pending.minecraftUsername} привязан к ${member.user.tag} (подтверждено в игре)`
+  );
+
+  // Assign player role if configured.
+  const config = await getMinecraftConfig(guildId);
+  if (config?.playerRoleId) {
+    const role = member.guild.roles.cache.get(config.playerRoleId);
+    if (role) {
+      await member.roles.add(role).catch((err) => {
+        log.warn(`Не удалось выдать роль игрока ${config.playerRoleId}`, err);
+      });
     }
   }
 
-  // Fallback to database link code verification
-  const result = await confirmAccountLink(guildId, member.id, code);
-
-  if (result.success && result.account) {
-    log.info(`Аккаунт Minecraft ${result.account.minecraftUsername} привязан к ${member.user.tag}`);
-
-    // Assign player role if configured
-    const config = await getMinecraftConfig(guildId);
-    if (config?.playerRoleId) {
-      const role = member.guild.roles.cache.get(config.playerRoleId);
-      if (role) {
-        await member.roles.add(role).catch((err) => {
-          log.warn(`Не удалось выдать роль игрока ${config.playerRoleId}`, err);
-        });
-      }
-    }
-  }
-
-  return result;
+  return { success: true, account };
 }
 
 

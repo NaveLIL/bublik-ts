@@ -46,6 +46,18 @@ export interface MinecraftShopItemData {
   updatedAt: Date;
 }
 
+/**
+ * Prisma `Int` is a signed 32-bit value. Keep shop prices inside the same
+ * domain so a custom item cannot overflow wallet or transaction arithmetic.
+ */
+export const MAX_MINECRAFT_SHOP_PRICE = 2_147_483_647;
+
+export function isSafeMinecraftShopPrice(priceShekels: number): boolean {
+  return Number.isSafeInteger(priceShekels)
+    && priceShekels > 0
+    && priceShekels <= MAX_MINECRAFT_SHOP_PRICE;
+}
+
 export async function getMinecraftConfig(guildId: string): Promise<MinecraftConfigData | null> {
   const db = getDatabase();
   return db.minecraftConfig.findUnique({
@@ -154,45 +166,6 @@ export async function createLinkCode(
   }) as Promise<MinecraftAccountData>;
 }
 
-export async function confirmAccountLink(
-  guildId: string,
-  discordId: string,
-  code: string
-): Promise<{ success: boolean; account?: MinecraftAccountData; reason?: string }> {
-  const db = getDatabase();
-  const account = await db.minecraftAccount.findUnique({
-    where: { guildId_discordId: { guildId, discordId } },
-  });
-
-  if (!account) {
-    return { success: false, reason: 'NOT_FOUND' };
-  }
-
-  if (account.isLinked) {
-    return { success: false, reason: 'ALREADY_LINKED' };
-  }
-
-  if (account.linkCode !== code) {
-    return { success: false, reason: 'INVALID_CODE' };
-  }
-
-  if (account.linkCodeExpiresAt && account.linkCodeExpiresAt < new Date()) {
-    return { success: false, reason: 'CODE_EXPIRED' };
-  }
-
-  const updated = await db.minecraftAccount.update({
-    where: { guildId_discordId: { guildId, discordId } },
-    data: {
-      isLinked: true,
-      linkedAt: new Date(),
-      linkCode: null,
-      linkCodeExpiresAt: null,
-    },
-  });
-
-  return { success: true, account: updated as MinecraftAccountData };
-}
-
 export async function forceLinkMinecraftAccount(
   guildId: string,
   discordId: string,
@@ -250,10 +223,13 @@ export async function getMinecraftShopItems(guildId: string): Promise<MinecraftS
   return items as MinecraftShopItemData[];
 }
 
-export async function getMinecraftShopItemById(id: string): Promise<MinecraftShopItemData | null> {
+export async function getMinecraftShopItemById(
+  guildId: string,
+  id: string
+): Promise<MinecraftShopItemData | null> {
   const db = getDatabase();
-  return db.minecraftShopItem.findUnique({
-    where: { id },
+  return db.minecraftShopItem.findFirst({
+    where: { id, guildId },
   }) as Promise<MinecraftShopItemData | null>;
 }
 
@@ -268,6 +244,12 @@ export async function createMinecraftShopItem(
     category?: string;
   }
 ): Promise<MinecraftShopItemData> {
+  if (!isSafeMinecraftShopPrice(data.priceShekels)) {
+    throw new RangeError(
+      `Minecraft shop price must be a positive integer not greater than ${MAX_MINECRAFT_SHOP_PRICE}`
+    );
+  }
+
   const db = getDatabase();
   return db.minecraftShopItem.create({
     data: {

@@ -19,21 +19,28 @@ import {
   buildMinecraftShopEmbed,
   buildMinecraftShopComponents,
   buildMinecraftPurchaseReceiptEmbed,
+  buildMinecraftPurchaseFailureText,
 } from '../embeds';
 import {
   updateMinecraftConfig,
   getMinecraftAccountByDiscordId,
   getMinecraftShopItems,
   createMinecraftShopItem,
+  isSafeMinecraftShopPrice,
+  MAX_MINECRAFT_SHOP_PRICE,
 } from '../database';
 import {
   requestAccountLink,
   processConfirmLink,
   processUnlinkAccount,
   getPlayerProfile,
+  isValidMinecraftJavaUsername,
 } from '../services/link-service';
 import { purchaseMinecraftShopItem } from '../services/economy-bridge';
 import { getDatabase } from '../../../core/Database';
+import { Config } from '../../../config';
+import { validateShopCommandTemplate } from '../services/shop-command-policy';
+import { isMinecraftGuildEnabled } from '../constants';
 
 const mcCommand: BublikCommand = {
   data: new SlashCommandBuilder()
@@ -185,6 +192,8 @@ const mcCommand: BublikCommand = {
               opt
                 .setName('price')
                 .setDescription('Цена в Шекелях ₪')
+                .setMinValue(1)
+                .setMaxValue(MAX_MINECRAFT_SHOP_PRICE)
                 .setRequired(true)
             )
             .addStringOption((opt) =>
@@ -217,6 +226,14 @@ const mcCommand: BublikCommand = {
     const subcommand = interaction.options.getSubcommand();
     const guildId = interaction.guildId!;
     const member = interaction.member as GuildMember;
+
+    if (!isMinecraftGuildEnabled(guildId)) {
+      await interaction.reply({
+        content: '⛔ Minecraft-модуль не подключён к этому Discord-серверу.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
 
     // Handle /mc rules
     if (subcommand === 'rules') {
@@ -280,15 +297,7 @@ const mcCommand: BublikCommand = {
       const result = await purchaseMinecraftShopItem(guildId, member, itemId);
 
       if (!result.success) {
-        let msg = '❌ Ошибка при покупке предмета.';
-        if (result.reason === 'NOT_LINKED') {
-          msg = '⚠️ Ваш Discord не привязан к Minecraft! Сначала привяжите аккаунт командой `/mc link username:<ник>`.';
-        } else if (result.reason === 'ITEM_NOT_FOUND') {
-          msg = '❌ Товар не найден или временно недоступен.';
-        } else if (result.reason === 'INSUFFICIENT_FUNDS') {
-          msg = `❌ Недостаточно Шекелей! Стоимость товара: **${result.item?.priceShekels}** ₪, ваш баланс: **${result.currentWallet ?? 0}** ₪.`;
-        }
-        await interaction.editReply({ content: msg });
+        await interaction.editReply({ content: buildMinecraftPurchaseFailureText(result) });
         return;
       }
 
@@ -303,6 +312,13 @@ const mcCommand: BublikCommand = {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const username = interaction.options.getString('username', true).trim();
       const code = interaction.options.getString('code')?.trim();
+
+      if (!isValidMinecraftJavaUsername(username)) {
+        await interaction.editReply({
+          content: '❌ Некорректный Minecraft Java ник. Используйте от 3 до 16 латинских букв, цифр или символов подчёркивания.',
+        });
+        return;
+      }
 
       const existing = await getMinecraftAccountByDiscordId(guildId, interaction.user.id);
       if (existing?.isLinked) {
@@ -321,6 +337,12 @@ const mcCommand: BublikCommand = {
             reasonText = '⏱️ Срок действия кода истёк. Сгенерируйте новый код повторным вызовом `/mc link username:<ник>`.';
           } else if (confirmResult.reason === 'NOT_FOUND') {
             reasonText = '❌ Сначала запросите код командой `/mc link username:<ник>`.';
+          } else if (confirmResult.reason === 'USERNAME_MISMATCH') {
+            reasonText = '❌ Ник не совпадает с заявкой на привязку. Запросите новый код для нужного ника.';
+          } else if (confirmResult.reason === 'RCON_UNAVAILABLE') {
+            reasonText = '⚠️ Игровое подтверждение сейчас недоступно. Аккаунт не был привязан; попробуйте позже.';
+          } else if (confirmResult.reason === 'VERIFICATION_FAILED') {
+            reasonText = '❌ Сервер Minecraft не подтвердил этот код. Выполните подтверждение в игре и повторите попытку.';
           }
           await interaction.editReply({ content: reasonText });
           return;
@@ -357,9 +379,15 @@ const mcCommand: BublikCommand = {
 
     // Handle /mc setup group
     if (group === 'setup') {
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      const isOwnerOnlyShopAdd = subcommand === 'shop-add';
+      const isConfiguredOwner = Boolean(Config.ownerId) && interaction.user.id === Config.ownerId;
+      const canManageGuild = interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
+
+      if (isOwnerOnlyShopAdd ? !isConfiguredOwner : !canManageGuild) {
         await interaction.reply({
-          content: '⛔ Только администраторы сервера могут изменять настройки модуля Minecraft.',
+          content: isOwnerOnlyShopAdd
+            ? '⛔ Добавлять RCON-товары может только настроенный владелец бота.'
+            : '⛔ Только администраторы сервера могут изменять настройки модуля Minecraft.',
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -418,10 +446,25 @@ const mcCommand: BublikCommand = {
         const icon = interaction.options.getString('icon')?.trim() ?? '📦';
         const desc = interaction.options.getString('description')?.trim();
 
+        if (!isSafeMinecraftShopPrice(price)) {
+          await interaction.editReply({
+            content: `❌ Цена должна быть целым числом от 1 до ${MAX_MINECRAFT_SHOP_PRICE.toLocaleString('ru-RU')} ₪.`,
+          });
+          return;
+        }
+
+        const commandPolicy = validateShopCommandTemplate(commandStr);
+        if (!commandPolicy.ok) {
+          await interaction.editReply({
+            content: `❌ Небезопасный шаблон выдачи. ${commandPolicy.reason}`,
+          });
+          return;
+        }
+
         const newItem = await createMinecraftShopItem(guildId, {
           name,
           priceShekels: price,
-          rconCommand: commandStr,
+          rconCommand: commandPolicy.commands.join('; '),
           iconEmoji: icon,
           description: desc,
         });
