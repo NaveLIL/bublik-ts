@@ -6,6 +6,7 @@ import { PrismaClient } from '@prisma/client';
 const {
   compareSnapshots,
   expectedPostflightCheckIds,
+  POSTFLIGHT_PROFILE,
 } = require('./snapshot-baseline-data') as {
   compareSnapshots: (before: unknown, after: unknown) => {
     status: string;
@@ -13,7 +14,11 @@ const {
     tableCount: number;
     sequenceCount: number;
   };
-  expectedPostflightCheckIds: (schema: string) => string[];
+  expectedPostflightCheckIds: (schema: string, profile?: string) => string[];
+  POSTFLIGHT_PROFILE: {
+    MIGRATION: 'migration';
+    OPERATIONAL: 'operational';
+  };
 };
 
 const root = resolve(__dirname, '..');
@@ -45,10 +50,21 @@ const MINECRAFT_CHAT = '20260724183500_add_chat_channel_id';
 const RUNTIME_SCHEMA_RECONCILIATION = '20260727000000_reconcile_runtime_schema';
 type CommandResult = SpawnSyncReturns<string>;
 type PostflightReport = {
+  profile: 'migration' | 'operational';
   status: string;
   checks: Array<{ id: string; violations: string }>;
   counts: Array<{ id: string; count: string }>;
   skippedChecks: string[];
+};
+type PreflightReport = {
+  profile: 'migration' | 'operational';
+  status: string;
+  checks: Array<{ id: string; violations: string }>;
+};
+type SnapshotReport = {
+  profile: 'migration' | 'operational';
+  status: string;
+  invariants: Array<{ id: string; violations: string }>;
 };
 
 function guardDedicatedServer(databaseUrl: string): URL {
@@ -184,9 +200,18 @@ function parseJsonOutput<T>(result: CommandResult, label: string, urls: string[]
   }
 }
 
-function runSnapshot(targetUrl: string, urls: string[]): unknown {
+function runSnapshot(
+  targetUrl: string,
+  urls: string[],
+  profile: 'migration' | 'operational' = POSTFLIGHT_PROFILE.MIGRATION,
+): unknown {
   const result = runNode(
-    [dataGateScript, '--snapshot'],
+    [
+      dataGateScript,
+      profile === POSTFLIGHT_PROFILE.MIGRATION
+        ? '--snapshot'
+        : '--snapshot-operational',
+    ],
     { ...process.env, DATABASE_URL: targetUrl },
     urls,
   );
@@ -194,13 +219,47 @@ function runSnapshot(targetUrl: string, urls: string[]): unknown {
   return parseJsonOutput(result, 'snapshot', urls);
 }
 
+function runOperationalPreflight(targetUrl: string, urls: string[]): PreflightReport {
+  const result = runNode(
+    [dataGateScript, '--preflight-operational'],
+    { ...process.env, DATABASE_URL: targetUrl },
+    urls,
+  );
+  assert.equal(result.status, 0, `operational preflight failed: ${commandDetails(result, urls)}`);
+  const report = parseJsonOutput<PreflightReport>(result, 'operational preflight', urls);
+  assert.equal(report.profile, POSTFLIGHT_PROFILE.OPERATIONAL);
+  assert.equal(report.status, 'ok');
+  assert.deepEqual(
+    report.checks.map(check => check.id),
+    [
+      'team_members_orphans',
+      'team_members_duplicate_guild_user',
+      'regbattle_squads_duplicate_guild_number',
+      'regbattle_squads_duplicate_guild_owner',
+      'vacation_requests_duplicate_live',
+      'ns_vacations_duplicate_live_slot',
+      'team_applications_duplicate_actionable',
+      'team_polls_duplicate_active',
+      'economy_raids_duplicate_live',
+    ],
+  );
+  assert.ok(report.checks.every(check => check.violations === '0'));
+  return report;
+}
+
 function runPostflight(
   targetUrl: string,
   urls: string[],
   expectedStatus: 'ok' | 'blocked',
+  profile: 'migration' | 'operational' = POSTFLIGHT_PROFILE.MIGRATION,
 ): PostflightReport {
   const result = runNode(
-    [dataGateScript, '--postflight'],
+    [
+      dataGateScript,
+      profile === POSTFLIGHT_PROFILE.MIGRATION
+        ? '--postflight'
+        : '--postflight-operational',
+    ],
     { ...process.env, DATABASE_URL: targetUrl },
     urls,
   );
@@ -211,18 +270,52 @@ function runPostflight(
   );
   const report = parseJsonOutput<PostflightReport>(result, 'postflight', urls);
   assert.equal(report.status, expectedStatus);
+  assert.equal(report.profile, profile);
   if (expectedStatus === 'ok') {
     assert.deepEqual(
       report.checks.map(check => check.id),
-      expectedPostflightCheckIds('public'),
+      expectedPostflightCheckIds('public', profile),
     );
     assert.ok(report.checks.every(check => check.violations === '0'));
     assert.deepEqual(report.skippedChecks, []);
   } else {
     assert.ok(report.checks.some(check => check.violations !== '0'));
-    assert.ok(report.skippedChecks.length > 0);
   }
   return report;
+}
+
+async function seedOperationalClaims(targetUrl: string, count: number): Promise<void> {
+  const client = new PrismaClient({ datasources: { db: { url: targetUrl } } });
+  try {
+    const createdAt = new Date(Date.now() - 60_000);
+    const expiresAt = new Date(Date.now() + 60 * 60_000);
+    const result = await client.operationClaim.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        key: `data_gate_operational_${String(index).padStart(3, '0')}`,
+        scope: 'data_gate_operational',
+        guildId: 'integration-guild',
+        userId: `integration-user-${index}`,
+        metadata: { fixture: true, index },
+        createdAt,
+        expiresAt,
+      })),
+    });
+    assert.equal(result.count, count);
+  } finally {
+    await client.$disconnect();
+  }
+}
+
+async function corruptOperationalClaim(targetUrl: string): Promise<void> {
+  const client = new PrismaClient({ datasources: { db: { url: targetUrl } } });
+  try {
+    await client.operationClaim.update({
+      where: { key: 'data_gate_operational_000' },
+      data: { scope: ' ' },
+    });
+  } finally {
+    await client.$disconnect();
+  }
 }
 
 async function readMigrationSteps(targetUrl: string): Promise<Array<[string, number]>> {
@@ -362,8 +455,67 @@ async function main(): Promise<void> {
     assert.equal(voteCount?.count, '6');
 
     const passedTests = runRequiredDataGateTests(urlsByPurpose, sensitiveUrls);
+    await seedOperationalClaims(urlsByPurpose.resolved, 342);
+    runOperationalPreflight(urlsByPurpose.resolved, sensitiveUrls);
+    const operationalSnapshot = runSnapshot(
+      urlsByPurpose.resolved,
+      sensitiveUrls,
+      POSTFLIGHT_PROFILE.OPERATIONAL,
+    ) as SnapshotReport;
+    assert.equal(operationalSnapshot.profile, POSTFLIGHT_PROFILE.OPERATIONAL);
+    assert.equal(operationalSnapshot.status, 'ok');
+    assert.deepEqual(
+      operationalSnapshot.invariants.map(check => check.id),
+      [
+        'team_members_orphans',
+        'team_members_duplicate_guild_user',
+        'regbattle_squads_duplicate_guild_number',
+        'regbattle_squads_duplicate_guild_owner',
+        'vacation_requests_duplicate_live',
+        'ns_vacations_duplicate_live_slot',
+        'team_applications_duplicate_actionable',
+        'team_polls_duplicate_active',
+        'economy_raids_duplicate_live',
+      ],
+    );
+    const strictOperationalDataReport = runPostflight(
+      urlsByPurpose.resolved,
+      sensitiveUrls,
+      'blocked',
+    );
+    assert.deepEqual(
+      strictOperationalDataReport.checks
+        .filter(check => check.violations !== '0')
+        .map(check => [check.id, check.violations]),
+      [['operation_claims_initially_empty', '342']],
+    );
+    const operationalReport = runPostflight(
+      urlsByPurpose.resolved,
+      sensitiveUrls,
+      'ok',
+      POSTFLIGHT_PROFILE.OPERATIONAL,
+    );
+    assert.equal(
+      operationalReport.counts.find(count => count.id === 'operation_claims_rows')?.count,
+      '342',
+    );
+    await corruptOperationalClaim(urlsByPurpose.resolved);
+    const corruptOperationalReport = runPostflight(
+      urlsByPurpose.resolved,
+      sensitiveUrls,
+      'blocked',
+      POSTFLIGHT_PROFILE.OPERATIONAL,
+    );
+    assert.deepEqual(
+      corruptOperationalReport.checks
+        .filter(check => check.violations !== '0')
+        .map(check => [check.id, check.violations]),
+      [['operation_claims_runtime_integrity', '1']],
+    );
     process.stdout.write(
-      `data-gate integration: legacy blocked; resolved(0), fresh(1), populated backfills; TAP pass=${passedTests}, fail=0, skipped=0\n`,
+      'data-gate integration: legacy blocked; resolved(0), fresh(1), populated backfills; '
+        + `operational claims 342 accepted and malformed claim blocked; TAP pass=${passedTests}, `
+        + 'fail=0, skipped=0\n',
     );
   } catch (error) {
     primaryError = error;

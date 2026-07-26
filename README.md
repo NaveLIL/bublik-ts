@@ -50,6 +50,14 @@ production, ранее созданный через prisma db push, разре�
 project bublik-n с контейнерами bublik-bot, bublik-postgres и bublik-redis. Python-
 бота с похожим именем он не затрагивает.
 
+Ниже описан повторный upgrade уже мигрированного production: для текущего
+перехода с четырёх применённых миграций на шесть все data-gate вызовы используют
+явные `--preflight-operational`, `--snapshot-operational` и
+`--postflight-operational`, а migration-only контейнер — только
+`PRISMA_BASELINE_EXISTING=0`. Строгие режимы без суффикса `-operational` и
+одноразовый baseline resolve относятся лишь к первоначальному legacy cutover и
+не должны подменять команды повторного upgrade.
+
 Никогда не используй docker compose down, ключ -v, неявное имя Compose project,
 сборку на production из активного каталога или плавающий образ при восстановлении.
 Не изменяй /opt/bublik-n/docker-compose.yml и /opt/bublik-n/locales, пока старый
@@ -327,7 +335,8 @@ exec tmux new -As "bublik-$RELEASE_ID"
 проверяет подпись артефакта до source, архитектуру, реальные контейнеры и тома,
 затем доказывает без вывода логина или пароля, что старый и новый runtime смотрят
 строго в postgres:5432/bublik?schema=public и что DNS ведёт именно в
-bublik-postgres. В конце запускается read-only preflight всех 40 исходных таблиц.
+bublik-postgres. В конце запускается operational read-only preflight всех 40
+исходных таблиц.
 
 ~~~bash
 set -euo pipefail
@@ -561,11 +570,14 @@ docker compose -p "$project" --project-directory "$validation" \
   -f "$validation/docker-compose.yml" --env-file "$validation/.env" \
   run --rm --no-deps --user 0:0 -v "$state_dir:/release-state" \
   --entrypoint node bot scripts/snapshot-baseline-data.js \
-  --preflight --output /release-state/preflight-live.json
+  --preflight-operational --output /release-state/preflight-live.json
 docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
-    if(r.format!=="bublik-baseline-data-preflight/v1"||r.status!=="ok"||r.tableCount!==40)process.exit(1);
+    if(r.format!=="bublik-baseline-data-preflight/v1"||
+       r.profile!=="operational"||r.status!=="ok"||r.tableCount!==40||
+       r.checks.length!==9||new Set(r.checks.map(c=>c.id)).size!==9||
+       r.checks.some(c=>c.violations!=="0"))process.exit(1);
   });
 ' < "$state_dir/preflight-live.json"
 
@@ -1042,18 +1054,21 @@ test ! -e "$CHECKPOINT_DIR/baseline-before.json"
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --preflight \
+  scripts/snapshot-baseline-data.js --preflight-operational \
   --output /checkpoint/baseline-preflight.json
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /checkpoint/baseline-before.json
 docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
     if(r.format!=="bublik-baseline-data-snapshot/v2"||r.status!=="ok"||
-       r.tableCount!==40||r.sequenceCount!==1||
+       r.profile!=="operational"||r.tableCount!==40||r.sequenceCount!==1||
+       r.invariants.length!==9||
+       new Set(r.invariants.map(c=>c.id)).size!==9||
+       r.invariants.some(c=>c.violations!=="0")||
        r.fingerprintAlgorithm!=="postgres-sha256-canonical-json/v1"||
        r.consistency?.writerStateRequired!=="stopped"||
        r.tables.some(t=>!/^([0-9a-f]{64})$/.test(t.fingerprint))||
@@ -1242,8 +1257,10 @@ printf 'Checkpoint captured. bot, Redis и production PostgreSQL останов�
 в одноразовый PostgreSQL из точного production image ID, также без host-портов и вне
 production volume. Восстановленный снимок обязан совпасть со всеми 40 таблицами
 pre-cutover. После этого именно release image через свой production entrypoint выполняет
-`MIGRATE_ONLY=1` и одноразовый baseline resolve. Обязательны 31/31 postflight checks,
-пустой schema diff через datasource и повторное полное совпадение 40 таблиц и sequence.
+`MIGRATE_ONLY=1` с `PRISMA_BASELINE_EXISTING=0`: это повторный переход с четырёх
+уже применённых миграций на шесть, поэтому baseline resolve запрещён. Обязательны
+operational-профиль и точные 19/19 postflight checks, пустой schema diff через
+datasource и повторное полное совпадение 40 таблиц и sequence.
 
 ~~~bash
 set -euo pipefail
@@ -1497,12 +1514,12 @@ test ! -e "$CHECKPOINT_DIR/rehearsal-after-comparison.json"
 docker run --rm --user 0:0 --network "$network" \
   -e DATABASE_URL -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --preflight \
+  scripts/snapshot-baseline-data.js --preflight-operational \
   --output /checkpoint/rehearsal-preflight.json
 docker run --rm --user 0:0 --network "$network" \
   -e DATABASE_URL -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /checkpoint/rehearsal-snapshot.json
 docker run --rm --user 0:0 --entrypoint node \
   -v "$CHECKPOINT_DIR:/checkpoint" "$RELEASE_IMAGE_ID" \
@@ -1513,13 +1530,14 @@ docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
     if(r.format!=="bublik-baseline-data-comparison/v1"||r.status!=="identical"||
-       r.tableCount!==40||r.sequenceCount!==1||r.differences.length!==0)process.exit(1);
+       r.profile!=="operational"||r.tableCount!==40||r.sequenceCount!==1||
+       r.differences.length!==0)process.exit(1);
   });
 ' < "$CHECKPOINT_DIR/rehearsal-comparison.json"
 
 docker run --rm --network "$network" \
   -e DATABASE_URL \
-  -e MIGRATE_ONLY=1 -e PRISMA_BASELINE_EXISTING=1 \
+  -e MIGRATE_ONLY=1 -e PRISMA_BASELINE_EXISTING=0 \
   "$RELEASE_IMAGE_ID" > "$CHECKPOINT_DIR/rehearsal-migrate.log" 2>&1
 grep -Fq 'database migration completed; migration-only mode requested' \
   "$CHECKPOINT_DIR/rehearsal-migrate.log"
@@ -1530,16 +1548,24 @@ fi
 docker run --rm --user 0:0 --network "$network" \
   -e DATABASE_URL -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --postflight \
+  scripts/snapshot-baseline-data.js --postflight-operational \
   --output /checkpoint/rehearsal-postflight.json
 docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
+    const gate=require("/app/scripts/snapshot-baseline-data.js");
+    const requiredChecks=gate.expectedPostflightCheckIds(
+      r.schema,
+      gate.POSTFLIGHT_PROFILE.OPERATIONAL
+    );
     const checkIds=r.checks.map(check=>check.id);
     const countIds=r.counts.map(count=>count.id);
     if(r.format!=="bublik-hardening-data-postflight/v1"||r.status!=="ok"||
+       r.profile!=="operational"||
        r.hardeningMigration!=="20260719010000_hardening"||r.tableCount!==40||
-       r.checks.length!==31||new Set(checkIds).size!==31||
+       requiredChecks.length!==19||r.checks.length!==19||
+       new Set(checkIds).size!==19||
+       JSON.stringify(checkIds)!==JSON.stringify(requiredChecks)||
        r.checks.some(check=>check.violations!=="0")||r.skippedChecks.length!==0||
        r.counts.length!==3||new Set(countIds).size!==3||
        r.counts.some(count=>!/^(0|[1-9][0-9]*)$/.test(count.count)))process.exit(1);
@@ -1553,7 +1579,7 @@ docker run --rm --network "$network" -e DATABASE_URL \
 docker run --rm --user 0:0 --network "$network" \
   -e DATABASE_URL -v "$CHECKPOINT_DIR:/checkpoint" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /checkpoint/rehearsal-after-snapshot.json
 docker run --rm --user 0:0 --entrypoint node \
   -v "$CHECKPOINT_DIR:/checkpoint" "$RELEASE_IMAGE_ID" \
@@ -1564,7 +1590,8 @@ docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
     if(r.format!=="bublik-baseline-data-comparison/v1"||r.status!=="identical"||
-       r.tableCount!==40||r.sequenceCount!==1||r.differences.length!==0)process.exit(1);
+       r.profile!=="operational"||r.tableCount!==40||r.sequenceCount!==1||
+       r.differences.length!==0)process.exit(1);
   });
 ' < "$CHECKPOINT_DIR/rehearsal-after-comparison.json"
 unset DATABASE_URL
@@ -1589,7 +1616,7 @@ find "$CHECKPOINT_DIR" -type f -exec chmod 0600 {} +
   sha256sum -c SHA256SUMS.final
 )
 install -o root -g root -m 0600 /dev/null "$state_dir/03-checkpoint-sealed"
-printf 'Redis full restore exact; PostgreSQL restore + migration passed: postflight 31/31; baseline 40/40 + sequence identical.\n'
+printf 'Redis full restore exact; PostgreSQL restore + migration passed: operational postflight 19/19; baseline 40/40 + sequence identical.\n'
 ~~~
 
 ### 4. Зашифровать checkpoint и проверить off-host копию
@@ -1736,8 +1763,10 @@ printf 'Encrypted off-host checkpoint verified.\n'
 
 Только теперь, когда bot, Redis и production PostgreSQL остановлены, меняются active Compose/locales.
 .env остаётся побайтно тем же. Перед миграцией повторно проверяются DB target и
-baseline snapshot. После миграции все 40 исходных таблиц и исходная sequence
-должны иметь то же состояние; сравнение количества нескольких таблиц недостаточно.
+operational baseline snapshot. Текущий повторный upgrade применяет миграции
+4→6 только с `PRISMA_BASELINE_EXISTING=0`. После миграции все 40 исходных таблиц
+и исходная sequence должны иметь то же состояние; сравнение количества нескольких
+таблиц недостаточно.
 
 ~~~bash
 set -euo pipefail
@@ -1987,12 +2016,12 @@ test ! -e "$state_dir/comparison-before-migration.json"
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --preflight \
+  scripts/snapshot-baseline-data.js --preflight-operational \
   --output /state/preflight-before-migration.json
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /state/snapshot-before-migration.json
 docker run --rm --user 0:0 --entrypoint node \
   -v "$CHECKPOINT_DIR:/checkpoint:ro" -v "$state_dir:/state" \
@@ -2003,7 +2032,8 @@ docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
     if(r.format!=="bublik-baseline-data-comparison/v1"||r.status!=="identical"||
-       r.tableCount!==40||r.sequenceCount!==1||r.differences.length!==0)process.exit(1);
+       r.profile!=="operational"||r.tableCount!==40||r.sequenceCount!==1||
+       r.differences.length!==0)process.exit(1);
   });
 ' < "$state_dir/comparison-before-migration.json"
 
@@ -2034,50 +2064,22 @@ test "$(date +%s)" -lt "$MAINTENANCE_DEADLINE_EPOCH"
 test "$(date +%s)" -lt "$MAINTENANCE_WINDOW_DEADLINE_EPOCH"
 assert_exact_pre_cutover_targets
 compose_release run --rm --no-deps \
-  -e MIGRATE_ONLY=1 -e PRISMA_BASELINE_EXISTING=1 bot
+  -e MIGRATE_ONLY=1 -e PRISMA_BASELINE_EXISTING=0 bot
 
 test ! -e "$state_dir/postflight-after-migration.json"
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --postflight \
+  scripts/snapshot-baseline-data.js --postflight-operational \
   --output /state/postflight-after-migration.json
 docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
-    const requiredChecks=[
-      "current_prisma_schema_exact",
-      "hardening_schema_projection",
-      "team_members_orphans",
-      "team_members_duplicate_guild_user",
-      "regbattle_squads_duplicate_guild_number",
-      "regbattle_squads_duplicate_guild_owner",
-      "vacation_requests_duplicate_live",
-      "ns_vacations_duplicate_live_slot",
-      "vacations_cross_table_live_role_overlap",
-      "vacation_requests_noncanonical_saved_roles",
-      "ns_vacations_noncanonical_saved_roles",
-      "team_applications_duplicate_actionable",
-      "team_polls_duplicate_active",
-      "economy_raids_duplicate_live",
-      "team_members_parent_guild_backfill",
-      "vacation_requests_active_key_semantics",
-      "ns_vacations_active_key_semantics",
-      "team_applications_active_key_semantics",
-      "team_polls_active_key_semantics",
-      "economy_raids_active_key_semantics",
-      "operation_claims_initially_empty",
-      "economy_black_market_deals_initially_empty",
-      "team_invites_processing_at_initially_null",
-      "team_applications_new_columns_initially_null",
-      "team_sessions_report_reminder_initially_null",
-      "team_polls_new_columns_initial_values",
-      "black_market_listing_creator_initially_null",
-      "team_polls_closed_at_backfill",
-      "team_polls_dedup_key_backfill",
-      "team_poll_votes_legacy_normalization",
-      "team_sessions_squad_voice_backfill"
-    ];
+    const gate=require("/app/scripts/snapshot-baseline-data.js");
+    const requiredChecks=gate.expectedPostflightCheckIds(
+      r.schema,
+      gate.POSTFLIGHT_PROFILE.OPERATIONAL
+    );
     const requiredCounts=[
       "operation_claims_rows",
       "team_poll_votes_rows",
@@ -2089,8 +2091,9 @@ docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
         required.every(id=>ids.includes(id));
     };
     if(r.format!=="bublik-hardening-data-postflight/v1"||r.status!=="ok"||
+       r.profile!=="operational"||requiredChecks.length!==19||
        r.hardeningMigration!=="20260719010000_hardening"||r.tableCount!==40||
-       r.skippedChecks.length!==0||
+       r.skippedChecks.length!==0||r.checks.length!==19||
        r.checks.some(c=>c.violations!=="0")||
        r.counts.some(c=>!/^(0|[1-9][0-9]*)$/.test(c.count))||
        !exactIds(r.checks,requiredChecks)||
@@ -2112,7 +2115,7 @@ test ! -e "$state_dir/comparison-after-migration.json"
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /state/snapshot-after-migration.json
 docker run --rm --user 0:0 --entrypoint node \
   -v "$CHECKPOINT_DIR:/checkpoint:ro" -v "$state_dir:/state" \
@@ -2123,7 +2126,8 @@ docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
     if(r.format!=="bublik-baseline-data-comparison/v1"||r.status!=="identical"||
-       r.tableCount!==40||r.sequenceCount!==1||r.differences.length!==0)process.exit(1);
+       r.profile!=="operational"||r.tableCount!==40||r.sequenceCount!==1||
+       r.differences.length!==0)process.exit(1);
   });
 ' < "$state_dir/comparison-after-migration.json"
 test "$(
@@ -3593,12 +3597,12 @@ test ! -e "$state_dir/comparison.rollback.json"
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --preflight \
+  scripts/snapshot-baseline-data.js --preflight-operational \
   --output /state/preflight.rollback.json
 docker run --rm --user 0:0 --network bublik-n_default \
   --env-file "$active/.env" -v "$state_dir:/state" \
   --entrypoint node "$RELEASE_IMAGE_ID" \
-  scripts/snapshot-baseline-data.js --snapshot \
+  scripts/snapshot-baseline-data.js --snapshot-operational \
   --output /state/snapshot.rollback.json
 docker run --rm --user 0:0 --entrypoint node \
   -v "$CHECKPOINT_DIR:/checkpoint:ro" -v "$state_dir:/state" \
@@ -3608,7 +3612,8 @@ docker run --rm --user 0:0 --entrypoint node \
 docker run --rm -i --entrypoint node "$RELEASE_IMAGE_ID" -e '
   let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{
     const r=JSON.parse(s);
-    if(r.status!=="identical"||r.tableCount!==40||r.sequenceCount!==1||
+    if(r.status!=="identical"||r.profile!=="operational"||
+       r.tableCount!==40||r.sequenceCount!==1||
        r.differences.length!==0)process.exit(1);
   });
 ' < "$state_dir/comparison.rollback.json"

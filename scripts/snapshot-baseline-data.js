@@ -14,6 +14,10 @@ const {
 const SNAPSHOT_FORMAT = 'bublik-baseline-data-snapshot/v2';
 const PREFLIGHT_FORMAT = 'bublik-baseline-data-preflight/v1';
 const POSTFLIGHT_FORMAT = 'bublik-hardening-data-postflight/v1';
+const POSTFLIGHT_PROFILE = Object.freeze({
+  MIGRATION: 'migration',
+  OPERATIONAL: 'operational',
+});
 const COMPARISON_FORMAT = 'bublik-baseline-data-comparison/v1';
 const FINGERPRINT_ALGORITHM = 'postgres-sha256-canonical-json/v1';
 const SNAPSHOT_CONSISTENCY = Object.freeze({
@@ -159,9 +163,12 @@ async function assertBaselineProjection(tx, schema, catalog) {
   }
 }
 
-function preflightCheckDefinitions(schema) {
+function preflightCheckDefinitions(schema, profile = POSTFLIGHT_PROFILE.MIGRATION) {
+  if (!Object.values(POSTFLIGHT_PROFILE).includes(profile)) {
+    throw new Error(`Unsupported preflight profile: ${String(profile)}`);
+  }
   const table = (name) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
-  return [
+  const migrationChecks = [
     {
       id: 'team_members_orphans',
       query: `
@@ -311,6 +318,20 @@ function preflightCheckDefinitions(schema) {
       `,
     },
   ];
+  if (profile === POSTFLIGHT_PROFILE.MIGRATION) return migrationChecks;
+
+  const operationalCheckIds = new Set([
+    'team_members_orphans',
+    'team_members_duplicate_guild_user',
+    'regbattle_squads_duplicate_guild_number',
+    'regbattle_squads_duplicate_guild_owner',
+    'vacation_requests_duplicate_live',
+    'ns_vacations_duplicate_live_slot',
+    'team_applications_duplicate_actionable',
+    'team_polls_duplicate_active',
+    'economy_raids_duplicate_live',
+  ]);
+  return migrationChecks.filter(({ id }) => operationalCheckIds.has(id));
 }
 
 const HARDENING_MIGRATION = '20260719010000_hardening';
@@ -878,9 +899,29 @@ async function readHardeningSchemaCheck(tx, schema) {
   };
 }
 
-function postflightCheckDefinitions(schema) {
+function postflightCheckDefinitions(schema, profile = POSTFLIGHT_PROFILE.MIGRATION) {
+  if (!Object.values(POSTFLIGHT_PROFILE).includes(profile)) {
+    throw new Error(`Unsupported postflight profile: ${String(profile)}`);
+  }
   const table = (name) => `${quoteIdentifier(schema)}.${quoteIdentifier(name)}`;
-  return [
+  const operationClaimsCheck = profile === POSTFLIGHT_PROFILE.MIGRATION
+    ? {
+      id: 'operation_claims_initially_empty',
+      query: `SELECT COUNT(*)::text AS violations FROM ${table('operation_claims')}`,
+    }
+    : {
+      id: 'operation_claims_runtime_integrity',
+      query: `
+        SELECT COUNT(*)::text AS violations
+        FROM ${table('operation_claims')}
+        WHERE btrim("key") = ''
+           OR btrim("scope") = ''
+           OR ("guildId" IS NOT NULL AND btrim("guildId") = '')
+           OR ("userId" IS NOT NULL AND btrim("userId") = '')
+           OR ("expiresAt" IS NOT NULL AND "expiresAt" < "createdAt")
+      `,
+    };
+  const migrationChecks = [
     {
       id: 'team_members_parent_guild_backfill',
       query: `
@@ -955,10 +996,7 @@ function postflightCheckDefinitions(schema) {
         END
       `,
     },
-    {
-      id: 'operation_claims_initially_empty',
-      query: `SELECT COUNT(*)::text AS violations FROM ${table('operation_claims')}`,
-    },
+    operationClaimsCheck,
     {
       id: 'economy_black_market_deals_initially_empty',
       query: `SELECT COUNT(*)::text AS violations FROM ${table('economy_black_market_deals')}`,
@@ -1132,14 +1170,40 @@ function postflightCheckDefinitions(schema) {
       `,
     },
   ];
+
+  if (profile === POSTFLIGHT_PROFILE.MIGRATION) return migrationChecks;
+
+  // One-time initial/backfill assertions cannot be replayed after normal bot
+  // activity. Keep only invariants that every supported runtime transition
+  // preserves, and validate the operational claims table structurally.
+  const durableCheckIds = new Set([
+    'team_members_parent_guild_backfill',
+    'vacation_requests_active_key_semantics',
+    'ns_vacations_active_key_semantics',
+    'team_polls_active_key_semantics',
+    'economy_raids_active_key_semantics',
+    'operation_claims_runtime_integrity',
+    'team_polls_dedup_key_backfill',
+  ]);
+  const durableChecks = migrationChecks.filter(({ id }) => durableCheckIds.has(id));
+  durableChecks.splice(2, 0, {
+    id: 'vacation_requests_live_role_snapshot_runtime_integrity',
+    query: `
+      SELECT COUNT(*)::text AS violations
+      FROM ${table('vacation_requests')}
+      WHERE "status" IN ('active', 'restoring')
+        AND "roleSnapshotAt" IS NULL
+    `,
+  });
+  return durableChecks;
 }
 
-function expectedPostflightCheckIds(schema) {
+function expectedPostflightCheckIds(schema, profile = POSTFLIGHT_PROFILE.MIGRATION) {
   return [
     'hardening_schema_projection',
     'current_prisma_schema_exact',
-    ...preflightCheckDefinitions(schema).map(({ id }) => id),
-    ...postflightCheckDefinitions(schema).map(({ id }) => id),
+    ...preflightCheckDefinitions(schema, profile).map(({ id }) => id),
+    ...postflightCheckDefinitions(schema, profile).map(({ id }) => id),
   ];
 }
 
@@ -1151,9 +1215,9 @@ function postflightCountDefinitions(schema) {
   }));
 }
 
-async function readPreflightChecks(tx, schema) {
+async function readPreflightChecks(tx, schema, profile = POSTFLIGHT_PROFILE.MIGRATION) {
   const checks = [];
-  for (const definition of preflightCheckDefinitions(schema)) {
+  for (const definition of preflightCheckDefinitions(schema, profile)) {
     const rows = await tx.$queryRawUnsafe(definition.query);
     const violations = rows[0]?.violations;
     if (rows.length !== 1 || typeof violations !== 'string' || !/^(0|[1-9]\d*)$/.test(violations)) {
@@ -1177,10 +1241,15 @@ async function readCountChecks(tx, definitions, field = 'violations') {
   return checks;
 }
 
-async function inspectPostflightDatabase(databaseUrl) {
+async function inspectPostflightDatabase(
+  databaseUrl,
+  profile = POSTFLIGHT_PROFILE.MIGRATION,
+) {
   const schema = targetSchemaFromDatabaseUrl(databaseUrl);
   const catalog = parseBaselineCatalog();
   const tableColumns = tableColumnsFromCatalog(catalog);
+  // Validate the profile before opening a database connection.
+  postflightCheckDefinitions(schema, profile);
   const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
   try {
@@ -1188,10 +1257,11 @@ async function inspectPostflightDatabase(databaseUrl) {
       await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
       await assertBaselineProjection(tx, schema, catalog);
       const schemaCheck = await readHardeningSchemaCheck(tx, schema);
-      const semanticDefinitions = postflightCheckDefinitions(schema);
+      const semanticDefinitions = postflightCheckDefinitions(schema, profile);
       if (schemaCheck.violations !== '0') {
         return {
           format: POSTFLIGHT_FORMAT,
+          profile,
           status: 'blocked',
           baseline: baselineMetadata(),
           hardeningMigration: HARDENING_MIGRATION,
@@ -1206,6 +1276,7 @@ async function inspectPostflightDatabase(databaseUrl) {
       if (exactSchemaCheck.violations !== '0') {
         return {
           format: POSTFLIGHT_FORMAT,
+          profile,
           status: 'blocked',
           baseline: baselineMetadata(),
           hardeningMigration: HARDENING_MIGRATION,
@@ -1217,12 +1288,13 @@ async function inspectPostflightDatabase(databaseUrl) {
         };
       }
 
-      const baselineChecks = await readPreflightChecks(tx, schema);
+      const baselineChecks = await readPreflightChecks(tx, schema, profile);
       const semanticChecks = await readCountChecks(tx, semanticDefinitions);
       const counts = await readCountChecks(tx, postflightCountDefinitions(schema), 'count');
       const checks = [schemaCheck, exactSchemaCheck, ...baselineChecks, ...semanticChecks];
       return {
         format: POSTFLIGHT_FORMAT,
+        profile,
         status: checks.every((check) => check.violations === '0') ? 'ok' : 'blocked',
         baseline: baselineMetadata(),
         hardeningMigration: HARDENING_MIGRATION,
@@ -1242,8 +1314,11 @@ async function inspectPostflightDatabase(databaseUrl) {
   }
 }
 
-async function createPostflightReport(databaseUrl = process.env.DATABASE_URL) {
-  return inspectPostflightDatabase(databaseUrl);
+async function createPostflightReport(
+  databaseUrl = process.env.DATABASE_URL,
+  profile = POSTFLIGHT_PROFILE.MIGRATION,
+) {
+  return inspectPostflightDatabase(databaseUrl, profile);
 }
 
 function buildFingerprintQuery(schema, table, columns) {
@@ -1307,9 +1382,10 @@ async function readSequenceStates(tx, schema, sequenceNames) {
   return sequences;
 }
 
-function makePreflightReport(schema, tableCount, checks) {
+function makePreflightReport(schema, tableCount, checks, profile) {
   return {
     format: PREFLIGHT_FORMAT,
+    profile,
     status: checks.every((check) => check.violations === '0') ? 'ok' : 'blocked',
     baseline: baselineMetadata(),
     schema,
@@ -1318,18 +1394,24 @@ function makePreflightReport(schema, tableCount, checks) {
   };
 }
 
-async function inspectDatabase(databaseUrl, includeFingerprints) {
+async function inspectDatabase(
+  databaseUrl,
+  includeFingerprints,
+  profile = POSTFLIGHT_PROFILE.MIGRATION,
+) {
   const schema = targetSchemaFromDatabaseUrl(databaseUrl);
   const catalog = parseBaselineCatalog();
   const tableColumns = tableColumnsFromCatalog(catalog);
+  // Validate the selected profile before opening a database connection.
+  preflightCheckDefinitions(schema, profile);
   const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
 
   try {
     return await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
       await assertBaselineProjection(tx, schema, catalog);
-      const checks = await readPreflightChecks(tx, schema);
-      const report = makePreflightReport(schema, tableColumns.size, checks);
+      const checks = await readPreflightChecks(tx, schema, profile);
+      const report = makePreflightReport(schema, tableColumns.size, checks, profile);
       if (!includeFingerprints || report.status !== 'ok') return { report, snapshot: null };
 
       const tables = await readTableFingerprints(tx, schema, tableColumns);
@@ -1341,6 +1423,7 @@ async function inspectDatabase(databaseUrl, includeFingerprints) {
         report,
         snapshot: {
           format: SNAPSHOT_FORMAT,
+          profile,
           status: 'ok',
           baseline: baselineMetadata(),
           schema,
@@ -1363,13 +1446,19 @@ async function inspectDatabase(databaseUrl, includeFingerprints) {
   }
 }
 
-async function createPreflightReport(databaseUrl = process.env.DATABASE_URL) {
-  const result = await inspectDatabase(databaseUrl, false);
+async function createPreflightReport(
+  databaseUrl = process.env.DATABASE_URL,
+  profile = POSTFLIGHT_PROFILE.MIGRATION,
+) {
+  const result = await inspectDatabase(databaseUrl, false, profile);
   return result.report;
 }
 
-async function createSnapshot(databaseUrl = process.env.DATABASE_URL) {
-  const result = await inspectDatabase(databaseUrl, true);
+async function createSnapshot(
+  databaseUrl = process.env.DATABASE_URL,
+  profile = POSTFLIGHT_PROFILE.MIGRATION,
+) {
+  const result = await inspectDatabase(databaseUrl, true, profile);
   if (!result.snapshot) throw new InvariantViolationError(result.report);
   return result.snapshot;
 }
@@ -1381,6 +1470,14 @@ function isPlainObject(value) {
 function assertValidSnapshot(snapshot) {
   if (!isPlainObject(snapshot) || snapshot.format !== SNAPSHOT_FORMAT || snapshot.status !== 'ok') {
     throw new Error(`Snapshot must use ${SNAPSHOT_FORMAT} with status=ok.`);
+  }
+  // v2 snapshots created before profiles existed are strict migration
+  // snapshots. Normalize by copying so callers' evidence objects stay intact.
+  if (!Object.prototype.hasOwnProperty.call(snapshot, 'profile')) {
+    snapshot = { ...snapshot, profile: POSTFLIGHT_PROFILE.MIGRATION };
+  }
+  if (!Object.values(POSTFLIGHT_PROFILE).includes(snapshot.profile)) {
+    throw new Error(`Snapshot contains an unsupported data-gate profile: ${String(snapshot.profile)}`);
   }
   if (!isPlainObject(snapshot.baseline)
     || snapshot.baseline.migration !== BASELINE
@@ -1408,7 +1505,8 @@ function assertValidSnapshot(snapshot) {
     throw new Error(`Snapshot must contain exactly ${expectedTables.size} immutable baseline tables.`);
   }
 
-  const expectedChecks = preflightCheckDefinitions(snapshot.schema).map((check) => check.id);
+  const expectedChecks = preflightCheckDefinitions(snapshot.schema, snapshot.profile)
+    .map((check) => check.id);
   if (!Array.isArray(snapshot.invariants)
     || snapshot.invariants.length !== expectedChecks.length
     || snapshot.invariants.some((check, index) => !isPlainObject(check)
@@ -1463,6 +1561,9 @@ function compareSnapshots(beforeInput, afterInput) {
   if (before.schema !== after.schema) {
     differences.push({ field: 'schema', before: before.schema, after: after.schema });
   }
+  if (before.profile !== after.profile) {
+    differences.push({ field: 'profile', before: before.profile, after: after.profile });
+  }
   for (let index = 0; index < before.tables.length; index += 1) {
     const beforeTable = before.tables[index];
     const afterTable = after.tables[index];
@@ -1508,6 +1609,7 @@ function compareSnapshots(beforeInput, afterInput) {
     format: COMPARISON_FORMAT,
     status: differences.length ? 'different' : 'identical',
     baseline: baselineMetadata(),
+    profile: before.profile,
     schema: before.schema,
     tableCount: before.tableCount,
     sequenceCount: before.sequenceCount,
@@ -1523,7 +1625,13 @@ function parseArguments(argv) {
   let after = null;
 
   const chooseMode = (nextMode) => {
-    if (explicitMode) throw new Error('Choose exactly one mode: --snapshot, --preflight, --postflight, or --compare.');
+    if (explicitMode) {
+      throw new Error(
+        'Choose exactly one mode: --snapshot, --preflight, --postflight, '
+          + '--snapshot-operational, --preflight-operational, '
+          + '--postflight-operational, or --compare.',
+      );
+    }
     mode = nextMode;
     explicitMode = true;
   };
@@ -1532,10 +1640,16 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === '--snapshot') {
       chooseMode('snapshot');
+    } else if (argument === '--snapshot-operational') {
+      chooseMode('snapshot-operational');
     } else if (argument === '--preflight') {
       chooseMode('preflight');
+    } else if (argument === '--preflight-operational') {
+      chooseMode('preflight-operational');
     } else if (argument === '--postflight') {
       chooseMode('postflight');
+    } else if (argument === '--postflight-operational') {
+      chooseMode('postflight-operational');
     } else if (argument === '--compare') {
       chooseMode('compare');
       before = argv[++index];
@@ -1585,14 +1699,20 @@ function printHelp() {
   process.stdout.write([
     'Usage:',
     '  node scripts/snapshot-baseline-data.js [--snapshot] [--output snapshot.json]',
+    '  node scripts/snapshot-baseline-data.js --snapshot-operational [--output snapshot.json]',
     '  node scripts/snapshot-baseline-data.js --preflight [--output report.json]',
+    '  node scripts/snapshot-baseline-data.js --preflight-operational [--output report.json]',
     '  node scripts/snapshot-baseline-data.js --postflight [--output report.json]',
+    '  node scripts/snapshot-baseline-data.js --postflight-operational [--output report.json]',
     '  node scripts/snapshot-baseline-data.js --compare before.json after.json [--output comparison.json]',
     '',
     'Snapshot consistency requirement:',
     '  PostgreSQL sequences are non-MVCC. Stop every database writer for the entire',
     '  before/after snapshot so table fingerprints and sequence state are coherent.',
     '  Run --postflight once after the hardening migration and before starting the bot.',
+    '  Use the explicit *-operational modes only for an already-running migrated',
+    '  database. They retain durable invariants while excluding one-time migration',
+    '  assertions; runtime operation claims remain structurally validated.',
     '',
   ].join('\n'));
 }
@@ -1616,14 +1736,33 @@ async function main(argv = process.argv.slice(2)) {
     writeResult(report, options.output);
     return report.status === 'ok' ? 0 : 1;
   }
+  if (options.mode === 'preflight-operational') {
+    const report = await createPreflightReport(
+      process.env.DATABASE_URL,
+      POSTFLIGHT_PROFILE.OPERATIONAL,
+    );
+    writeResult(report, options.output);
+    return report.status === 'ok' ? 0 : 1;
+  }
   if (options.mode === 'postflight') {
     const report = await createPostflightReport();
     writeResult(report, options.output);
     return report.status === 'ok' ? 0 : 1;
   }
+  if (options.mode === 'postflight-operational') {
+    const report = await createPostflightReport(
+      process.env.DATABASE_URL,
+      POSTFLIGHT_PROFILE.OPERATIONAL,
+    );
+    writeResult(report, options.output);
+    return report.status === 'ok' ? 0 : 1;
+  }
 
   try {
-    const snapshot = await createSnapshot();
+    const profile = options.mode === 'snapshot-operational'
+      ? POSTFLIGHT_PROFILE.OPERATIONAL
+      : POSTFLIGHT_PROFILE.MIGRATION;
+    const snapshot = await createSnapshot(process.env.DATABASE_URL, profile);
     writeResult(snapshot, options.output);
     return 0;
   } catch (error) {
@@ -1652,6 +1791,7 @@ module.exports = {
   HARDENING_SHA256,
   InvariantViolationError,
   POSTFLIGHT_FORMAT,
+  POSTFLIGHT_PROFILE,
   PREFLIGHT_FORMAT,
   SNAPSHOT_CONSISTENCY,
   SNAPSHOT_FORMAT,
