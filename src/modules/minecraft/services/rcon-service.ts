@@ -65,6 +65,17 @@ export function resolveRconOptions(
   return { host, port, password, timeoutMs };
 }
 
+export function isRconConfigured(
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  try {
+    resolveRconOptions({}, environment);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function redactCredential(message: string, password: string): string {
   return password ? message.split(password).join('[REDACTED]') : message;
 }

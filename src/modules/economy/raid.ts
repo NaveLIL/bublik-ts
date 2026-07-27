@@ -63,7 +63,19 @@ export function isUnknownDiscordMemberError(error: unknown): boolean {
   return Number((error as { code?: unknown }).code) === 10_007;
 }
 
-async function isMemberAuthoritativelyAbsent(guild: any, userId: string): Promise<boolean> {
+const MAX_DISCORD_SNOWFLAKE = 18_446_744_073_709_551_615n;
+
+export function isDiscordSnowflake(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^[1-9]\d{16,19}$/.test(value)) return false;
+  return BigInt(value) <= MAX_DISCORD_SNOWFLAKE;
+}
+
+export async function isMemberAuthoritativelyAbsent(guild: any, userId: string): Promise<boolean> {
+  // EconomyProfile also stores durable system ledgers such as "government".
+  // They are not Discord users and must never be sent to the members endpoint
+  // or classified as abandoned accounts.
+  if (!isDiscordSnowflake(userId)) return false;
+
   try {
     await guild.members.fetch({ user: userId, force: true });
     return false;

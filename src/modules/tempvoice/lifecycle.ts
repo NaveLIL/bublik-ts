@@ -19,7 +19,7 @@ import { getGuildLocale } from '../../core/GuildConfig';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
 import { isGuildAllowed } from '../../core/Whitelist';
 import { getDatabase } from '../../core/Database';
-import { fetchSafeAutomaticRole } from '../../core/RolePolicy';
+import { fetchSafeAutomaticRole, UnsafeAutomaticRoleError } from '../../core/RolePolicy';
 import { withMemberRoleLock } from '../../core/MemberRoleLock';
 
 import {
@@ -61,7 +61,11 @@ import {
 } from './utils';
 import { runGeneratorExclusive, runPermissionMutation } from './permissionSync';
 import type { PendingVoiceSettlement } from './recovery';
-import { isTempVoiceRewardGrantPending, isUnknownChannelError } from './recovery';
+import {
+  isTempVoiceRewardGrantPending,
+  isUnknownChannelError,
+  MissingRewardRoleRetryGate,
+} from './recovery';
 import {
   cleanupTempVoiceCreationIntent,
   completeTempVoiceCreation,
@@ -80,6 +84,8 @@ import {
 } from './embeds';
 
 const log = logger.child('TempVoice:Lifecycle');
+const missingRewardRoleRetryGate = new MissingRewardRoleRetryGate();
+const rewardRoleAttempts = new Set<string>();
 
 // Таймеры удаления пустых каналов (channelId → timeout)
 const deleteTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -131,12 +137,16 @@ async function settlePendingVoiceTime(
   );
 
   const generator = await getGeneratorById(pending.generatorId);
+  const retryGateKey = `${pending.guildId}:${pending.generatorId}`;
   if (generator && isTempVoiceRewardGrantPending(
     generator.rewardRoleId,
     generator.rewardThresholdMin,
     settings.totalVoiceMinutes,
     settings.rewardGranted,
   )) {
+    const rewardRoleId = generator.rewardRoleId!;
+    if (!missingRewardRoleRetryGate.canAttempt(retryGateKey, rewardRoleId)) return;
+
     const guild = client.guilds.cache.get(pending.guildId);
     if (!guild) {
       throw new Error(`TempVoice reward guild ${pending.guildId} is not available`);
@@ -144,7 +154,43 @@ async function settlePendingVoiceTime(
     const member = memberHint?.guild.id === pending.guildId && memberHint.id === pending.userId
       ? memberHint
       : await guild.members.fetch({ user: pending.userId, force: true });
-    await grantRewardRole(member, generator, settings.totalVoiceMinutes, client);
+    if (
+      rewardRoleAttempts.has(retryGateKey) ||
+      !missingRewardRoleRetryGate.canAttempt(retryGateKey, rewardRoleId)
+    ) return;
+    rewardRoleAttempts.add(retryGateKey);
+    try {
+      await grantRewardRole(member, generator, settings.totalVoiceMinutes, client);
+      missingRewardRoleRetryGate.release(retryGateKey, rewardRoleId);
+    } catch (error) {
+      if (
+        error instanceof UnsafeAutomaticRoleError &&
+        error.reason === 'role_missing' &&
+        error.roleId === rewardRoleId
+      ) {
+        const quarantine = missingRewardRoleRetryGate.quarantine(retryGateKey, rewardRoleId);
+        log.warn('TempVoice reward settlement quarantined: configured role is missing', {
+          guildId: pending.guildId,
+          generatorId: pending.generatorId,
+          roleId: rewardRoleId,
+          retryAt: new Date(quarantine.retryAt).toISOString(),
+          failures: quarantine.failures,
+        });
+        return;
+      }
+      throw error;
+    } finally {
+      rewardRoleAttempts.delete(retryGateKey);
+    }
+  } else {
+    // A removed generator or disabled/replaced reward resolves stale
+    // quarantine. An ineligible member must not release quarantine for other
+    // members affected by the same still-missing role.
+    if (!generator?.rewardRoleId) {
+      missingRewardRoleRetryGate.release(retryGateKey);
+    } else {
+      missingRewardRoleRetryGate.canAttempt(retryGateKey, generator.rewardRoleId);
+    }
   }
 
   // Deleting after both the idempotent accounting transaction and any required
@@ -613,7 +659,9 @@ async function grantRewardRole(
       }
     }
   } catch (err) {
-    log.error(`Ошибка выдачи наградной роли для ${member.user.tag}`, { error: String(err) });
+    if (!(err instanceof UnsafeAutomaticRoleError && err.reason === 'role_missing')) {
+      log.error(`Ошибка выдачи наградной роли для ${member.user.tag}`, { error: String(err) });
+    }
     // Settlement/outbox deletion happens only after this function resolves.
     // Propagate every uncertain mutation or persistence failure so recovery can
     // force-fetch Discord and retry instead of losing the durable reward work.

@@ -53,6 +53,8 @@ import {
 } from '../cache-aside';
 import {
   calculateRaidStrikeDamage,
+  isDiscordSnowflake,
+  isMemberAuthoritativelyAbsent,
   isRaidLaunchMessage,
   isRecoverableRaidLaunch,
   isRaidTerminalRecoveryCandidate,
@@ -245,6 +247,47 @@ test('only Discord Unknown Member is authoritative absence evidence', () => {
   assert.equal(isUnknownDiscordMemberError({ code: 10_007 }), true);
   assert.equal(isUnknownDiscordMemberError({ code: 50_013 }), false);
   assert.equal(isUnknownDiscordMemberError(new Error('network')), false);
+});
+
+test('raid absence verification never sends system ledgers or invalid IDs to Discord', async () => {
+  let fetchCalls = 0;
+  const guild = {
+    members: {
+      fetch: async () => {
+        fetchCalls++;
+        throw new Error('Discord must not be called');
+      },
+    },
+  };
+
+  for (const userId of [
+    'government',
+    '',
+    '123',
+    '00000000000000000',
+    '18446744073709551616',
+  ]) {
+    assert.equal(isDiscordSnowflake(userId), false);
+    assert.equal(await isMemberAuthoritativelyAbsent(guild, userId), false);
+  }
+  assert.equal(fetchCalls, 0);
+});
+
+test('raid absence verification still checks real Discord snowflakes', async () => {
+  const userId = '123456789012345678';
+  let requested: unknown;
+  const guild = {
+    members: {
+      fetch: async (options: unknown) => {
+        requested = options;
+        return { id: userId };
+      },
+    },
+  };
+
+  assert.equal(isDiscordSnowflake(userId), true);
+  assert.equal(await isMemberAuthoritativelyAbsent(guild, userId), false);
+  assert.deepEqual(requested, { user: userId, force: true });
 });
 
 test('multi-account locks use one locale-independent order', () => {

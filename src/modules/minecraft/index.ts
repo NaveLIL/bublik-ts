@@ -13,7 +13,7 @@ import {
 } from './embeds';
 import { purchaseMinecraftShopItem } from './services/economy-bridge';
 import type { Client } from 'discord.js';
-import { isMinecraftGuildEnabled } from './constants';
+import { isMinecraftGuildEnabled, isMinecraftModuleConfigured } from './constants';
 
 let shopInteractionListener: ((...args: unknown[]) => void) | null = null;
 let shopInteractionClient: Client | null = null;
@@ -36,7 +36,15 @@ const minecraftModule: BublikModule = {
     shopInteractionClient = null;
     shopInteractionListener = null;
 
-    client.logger.child('Module:minecraft').info('Модуль Minecraft (EREZCRAFT) загружен');
+    const moduleLog = client.logger.child('Module:minecraft');
+    if (!isMinecraftModuleConfigured()) {
+      stopMinecraftStatusTracker();
+      stopChatBridge();
+      moduleLog.warn('Модуль Minecraft отключён: требуется MINECRAFT_GUILD_ID и полная конфигурация RCON');
+      return;
+    }
+
+    moduleLog.info('Модуль Minecraft (EREZCRAFT) загружен');
     await startMinecraftStatusTracker(client);
     await startChatBridge(client);
 

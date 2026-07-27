@@ -8,6 +8,7 @@ import {
   ALERT_DEGRADED_TPS_THRESHOLD,
   ALERT_COOLDOWN_MS,
   isMinecraftGuildEnabled,
+  isMinecraftModuleConfigured,
 } from '../constants';
 import { executeRconCommand } from './rcon-service';
 
@@ -16,8 +17,18 @@ const log = logger.child('Minecraft:StatusTracker');
 let trackerInterval: NodeJS.Timeout | null = null;
 let statusCheckInFlight = false;
 
-export async function startMinecraftStatusTracker(client: Client): Promise<void> {
+export async function startMinecraftStatusTracker(
+  client: Client,
+  environment: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
   if (trackerInterval) clearInterval(trackerInterval);
+  trackerInterval = null;
+  statusCheckInFlight = false;
+
+  if (!isMinecraftModuleConfigured(environment)) {
+    log.warn('Мониторинг Minecraft отключён: Minecraft/RCON не настроен');
+    return false;
+  }
 
   log.info('Запуск службы мониторинга Minecraft-серверов...');
   
@@ -34,6 +45,7 @@ export async function startMinecraftStatusTracker(client: Client): Promise<void>
       statusCheckInFlight = false;
     }
   }, STATUS_REFRESH_INTERVAL_MS);
+  return true;
 }
 
 export function stopMinecraftStatusTracker(): void {

@@ -11,9 +11,21 @@ import {
   stopChatBridge,
 } from '../../src/modules/minecraft/services/chat-bridge';
 import {
+  startMinecraftStatusTracker,
+  stopMinecraftStatusTracker,
+} from '../../src/modules/minecraft/services/status-tracker';
+import {
   getMinecraftGuildId,
   isMinecraftGuildEnabled,
+  isMinecraftModuleConfigured,
 } from '../../src/modules/minecraft/constants';
+
+const validMinecraftEnvironment = {
+  MINECRAFT_GUILD_ID: 'guild-a',
+  RCON_HOST: 'mc.internal',
+  RCON_PORT: '25575',
+  RCON_PASSWORD: 'test-secret',
+};
 
 class FakeClient extends EventEmitter {
   logger = {
@@ -47,13 +59,23 @@ test('MC chat routing is single-guild and fails closed when ownership is ambiguo
 
 test('Minecraft guild scope is explicit and fail-closed', () => {
   assert.equal(getMinecraftGuildId({}), null);
+  assert.equal(isMinecraftModuleConfigured({}), false);
   assert.equal(isMinecraftGuildEnabled('guild-a', {}), false);
   assert.equal(
-    isMinecraftGuildEnabled('guild-a', { MINECRAFT_GUILD_ID: ' guild-a ' }),
+    isMinecraftGuildEnabled('guild-a', { MINECRAFT_GUILD_ID: 'guild-a' }),
+    false,
+    'a guild id alone must not enable RCON-backed commands'
+  );
+  assert.equal(isMinecraftModuleConfigured(validMinecraftEnvironment), true);
+  assert.equal(
+    isMinecraftGuildEnabled('guild-a', {
+      ...validMinecraftEnvironment,
+      MINECRAFT_GUILD_ID: ' guild-a ',
+    }),
     true,
   );
   assert.equal(
-    isMinecraftGuildEnabled('guild-b', { MINECRAFT_GUILD_ID: 'guild-a' }),
+    isMinecraftGuildEnabled('guild-b', validMinecraftEnvironment),
     false,
   );
 });
@@ -79,10 +101,10 @@ test('chat bridge replaces and removes its Discord listener across reloads', asy
   const client = source as unknown as Client;
   t.after(() => stopChatBridge());
 
-  await startChatBridge(client);
+  await startChatBridge(client, { environment: validMinecraftEnvironment });
   assert.equal(source.listenerCount(Events.MessageCreate), 1);
 
-  await startChatBridge(client);
+  await startChatBridge(client, { environment: validMinecraftEnvironment });
   assert.equal(
     source.listenerCount(Events.MessageCreate),
     1,
@@ -91,6 +113,37 @@ test('chat bridge replaces and removes its Discord listener across reloads', asy
 
   stopChatBridge();
   assert.equal(source.listenerCount(Events.MessageCreate), 0);
+});
+
+test('chat bridge creates no listener or poll scheduler without RCON configuration', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  const source = new FakeClient();
+  const client = source as unknown as Client;
+  let polls = 0;
+
+  t.after(() => stopChatBridge());
+  const started = await startChatBridge(client, {
+    environment: {},
+    baseDelayMs: 1,
+    poll: async () => {
+      polls += 1;
+      return 'success';
+    },
+  });
+
+  assert.equal(started, false);
+  assert.equal(source.listenerCount(Events.MessageCreate), 0);
+  t.mock.timers.tick(10_000);
+  await Promise.resolve();
+  assert.equal(polls, 0);
+});
+
+test('status tracker remains stopped without RCON configuration', async (t) => {
+  const client = new FakeClient() as unknown as Client;
+  t.after(() => stopMinecraftStatusTracker());
+
+  assert.equal(await startMinecraftStatusTracker(client, {}), false);
 });
 
 test('chat polling never overlaps and backs off after failures', async (t) => {
@@ -106,6 +159,7 @@ test('chat polling never overlaps and backs off after failures', async (t) => {
 
   t.after(() => stopChatBridge());
   await startChatBridge(client, {
+    environment: validMinecraftEnvironment,
     baseDelayMs: 10,
     maxDelayMs: 80,
     poll: async () => {

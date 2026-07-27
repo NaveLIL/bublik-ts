@@ -51,6 +51,67 @@ export function isTempVoiceRewardGrantPending(
     totalVoiceMinutes >= rewardThresholdMin;
 }
 
+export interface MissingRewardRoleQuarantine {
+  roleId: string;
+  failures: number;
+  retryAt: number;
+}
+
+/**
+ * A deleted configured reward role is a permanent configuration error, not a
+ * transient Discord failure. Quarantine that generator/role pair so one bad
+ * configuration cannot retry once per pending member and flood the logs.
+ *
+ * The settlement itself remains durable. Changing the configured role id
+ * bypasses the quarantine immediately, while an unchanged configuration is
+ * retried with bounded exponential backoff.
+ */
+export class MissingRewardRoleRetryGate {
+  private readonly quarantines = new Map<string, MissingRewardRoleQuarantine>();
+
+  constructor(
+    private readonly initialDelayMs = 60 * 60 * 1_000,
+    private readonly maxDelayMs = 24 * 60 * 60 * 1_000,
+  ) {
+    if (!Number.isFinite(initialDelayMs) || initialDelayMs <= 0) {
+      throw new Error('Missing reward role retry delay must be positive');
+    }
+    if (!Number.isFinite(maxDelayMs) || maxDelayMs < initialDelayMs) {
+      throw new Error('Missing reward role maximum retry delay is invalid');
+    }
+  }
+
+  canAttempt(key: string, roleId: string, now = Date.now()): boolean {
+    const quarantine = this.quarantines.get(key);
+    if (!quarantine) return true;
+    if (quarantine.roleId !== roleId) {
+      this.quarantines.delete(key);
+      return true;
+    }
+    return now >= quarantine.retryAt;
+  }
+
+  quarantine(key: string, roleId: string, now = Date.now()): MissingRewardRoleQuarantine {
+    const previous = this.quarantines.get(key);
+    const failures = previous?.roleId === roleId ? previous.failures + 1 : 1;
+    const exponent = Math.min(failures - 1, 30);
+    const delayMs = Math.min(this.maxDelayMs, this.initialDelayMs * (2 ** exponent));
+    const quarantine = {
+      roleId,
+      failures,
+      retryAt: now + delayMs,
+    };
+    this.quarantines.set(key, quarantine);
+    return quarantine;
+  }
+
+  release(key: string, roleId?: string): void {
+    const quarantine = this.quarantines.get(key);
+    if (!quarantine || (roleId && quarantine.roleId !== roleId)) return;
+    this.quarantines.delete(key);
+  }
+}
+
 export function buildPendingVoiceSettlement(
   guildId: string,
   userId: string,

@@ -8,6 +8,7 @@ import { Events } from 'discord.js';
 import { logger } from '../../../core/Logger';
 import { getAllMinecraftConfigs } from '../database';
 import { getDatabase } from '../../../core/Database';
+import { isMinecraftModuleConfigured } from '../constants';
 import { executeRconCommand } from './rcon-service';
 import { isValidMinecraftJavaUsername } from './link-service';
 
@@ -27,6 +28,7 @@ export interface ChatBridgeOptions {
   poll?: (client: Client) => Promise<ChatPollResult>;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  environment?: NodeJS.ProcessEnv;
 }
 
 interface ChatBridgeRuntime {
@@ -92,8 +94,13 @@ export function buildDiscordTellrawCommand(
 export async function startChatBridge(
   client: Client,
   options: ChatBridgeOptions = {}
-): Promise<void> {
+): Promise<boolean> {
   stopChatBridge();
+
+  if (!isMinecraftModuleConfigured(options.environment)) {
+    log.warn('Кросс-чат отключён: Minecraft/RCON не настроен');
+    return false;
+  }
 
   // --- Discord → Minecraft ---
   const discordMessageListener = async (...args: unknown[]) => {
@@ -190,6 +197,7 @@ export async function startChatBridge(
   scheduleNextPoll(runtime, runtime.baseDelayMs);
 
   log.info('Кросс-чат мост запущен (Discord ↔ Minecraft)');
+  return true;
 }
 
 export function stopChatBridge(): void {

@@ -2,6 +2,8 @@
 //  Minecraft Module — Constants
 // ═══════════════════════════════════════════════
 
+import { isRconConfigured } from './services/rcon-service';
+
 export const MINECRAFT_PREFIX = 'mc';
 export const DEFAULT_SERVER_ADDRESS = 'play.erez.pro:25565';
 export const DEFAULT_SERVER_NAME = 'EREZCRAFT';
@@ -13,6 +15,12 @@ export function getMinecraftGuildId(
   return guildId || null;
 }
 
+export function isMinecraftModuleConfigured(
+  environment: NodeJS.ProcessEnv = process.env
+): boolean {
+  return getMinecraftGuildId(environment) !== null && isRconConfigured(environment);
+}
+
 /**
  * One RCON endpoint cannot safely serve unrelated Discord guilds. Until RCON
  * credentials become per-guild database configuration, Minecraft operations
@@ -22,7 +30,8 @@ export function isMinecraftGuildEnabled(
   guildId: string,
   environment: NodeJS.ProcessEnv = process.env
 ): boolean {
-  return getMinecraftGuildId(environment) === guildId;
+  return isMinecraftModuleConfigured(environment)
+    && getMinecraftGuildId(environment) === guildId;
 }
 
 /** Interval for status auto-refresh (60 seconds) */

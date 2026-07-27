@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveRconOptions } from '../../src/modules/minecraft/services/rcon-service';
+import {
+  isRconConfigured,
+  resolveRconOptions,
+} from '../../src/modules/minecraft/services/rcon-service';
 
 test('RCON configuration fails closed without explicit host, port and password', () => {
+  assert.equal(isRconConfigured({}), false);
   assert.throws(
     () => resolveRconOptions({}, {}),
     (error: unknown) => error instanceof Error && error.message === 'RCON_NOT_CONFIGURED'
@@ -10,13 +14,16 @@ test('RCON configuration fails closed without explicit host, port and password',
 });
 
 test('RCON configuration accepts explicit environment values', () => {
+  const environment = {
+    RCON_HOST: 'mc.internal',
+    RCON_PORT: '25575',
+    RCON_PASSWORD: 'test-secret',
+    RCON_TIMEOUT_MS: '7000',
+  };
+
+  assert.equal(isRconConfigured(environment), true);
   assert.deepEqual(
-    resolveRconOptions({}, {
-      RCON_HOST: 'mc.internal',
-      RCON_PORT: '25575',
-      RCON_PASSWORD: 'test-secret',
-      RCON_TIMEOUT_MS: '7000',
-    }),
+    resolveRconOptions({}, environment),
     {
       host: 'mc.internal',
       port: 25575,
