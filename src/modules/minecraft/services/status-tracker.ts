@@ -14,63 +14,132 @@ import { executeRconCommand } from './rcon-service';
 
 const log = logger.child('Minecraft:StatusTracker');
 
-let trackerInterval: NodeJS.Timeout | null = null;
-let statusCheckInFlight = false;
+interface StatusTrackerRuntime {
+  client: Client;
+  environment: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  abortListener?: () => void;
+  timer: NodeJS.Timeout | null;
+  currentCheck: Promise<void> | null;
+  stopped: boolean;
+}
+
+let trackerRuntime: StatusTrackerRuntime | null = null;
 
 export async function startMinecraftStatusTracker(
   client: Client,
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  if (trackerInterval) clearInterval(trackerInterval);
-  trackerInterval = null;
-  statusCheckInFlight = false;
+  await stopMinecraftStatusTracker();
 
-  if (!isMinecraftModuleConfigured(environment)) {
+  if (!isMinecraftModuleConfigured(environment) || signal?.aborted) {
     log.warn('Мониторинг Minecraft отключён: Minecraft/RCON не настроен');
     return false;
   }
 
-  log.info('Запуск службы мониторинга Minecraft-серверов...');
-  
-  // Initial check on load
-  await checkAllMinecraftStatuses(client);
-
-  // Periodic interval
-  trackerInterval = setInterval(async () => {
-    if (statusCheckInFlight) return;
-    statusCheckInFlight = true;
-    try {
-      await checkAllMinecraftStatuses(client);
-    } finally {
-      statusCheckInFlight = false;
-    }
-  }, STATUS_REFRESH_INTERVAL_MS);
-  return true;
-}
-
-export function stopMinecraftStatusTracker(): void {
-  if (trackerInterval) {
-    clearInterval(trackerInterval);
-    trackerInterval = null;
-    statusCheckInFlight = false;
-    log.info('Служба мониторинга Minecraft-серверов остановлена.');
+  const runtime: StatusTrackerRuntime = {
+    client,
+    environment,
+    signal,
+    timer: null,
+    currentCheck: null,
+    stopped: false,
+  };
+  trackerRuntime = runtime;
+  if (signal) {
+    runtime.abortListener = () => {
+      void stopStatusRuntime(runtime);
+    };
+    signal.addEventListener('abort', runtime.abortListener, { once: true });
   }
+
+  log.info('Запуск службы мониторинга Minecraft-серверов...');
+
+  await runStatusCheck(runtime);
+  return !runtime.stopped && trackerRuntime === runtime;
 }
 
-export async function checkAllMinecraftStatuses(client: Client): Promise<void> {
+async function stopStatusRuntime(runtime: StatusTrackerRuntime): Promise<void> {
+  if (runtime.stopped) {
+    await runtime.currentCheck?.catch(() => undefined);
+    return;
+  }
+
+  runtime.stopped = true;
+  if (trackerRuntime === runtime) trackerRuntime = null;
+  if (runtime.timer) {
+    clearTimeout(runtime.timer);
+    runtime.timer = null;
+  }
+  if (runtime.signal && runtime.abortListener) {
+    runtime.signal.removeEventListener('abort', runtime.abortListener);
+  }
+  await runtime.currentCheck?.catch(() => undefined);
+  log.info('Служба мониторинга Minecraft-серверов остановлена.');
+}
+
+export async function stopMinecraftStatusTracker(): Promise<void> {
+  const runtime = trackerRuntime;
+  if (runtime) await stopStatusRuntime(runtime);
+}
+
+function scheduleStatusCheck(runtime: StatusTrackerRuntime): void {
+  if (runtime.stopped || trackerRuntime !== runtime || runtime.signal?.aborted) return;
+  runtime.timer = setTimeout(() => {
+    runtime.timer = null;
+    void runStatusCheck(runtime);
+  }, STATUS_REFRESH_INTERVAL_MS);
+}
+
+async function runStatusCheck(runtime: StatusTrackerRuntime): Promise<void> {
+  if (
+    runtime.stopped
+    || trackerRuntime !== runtime
+    || runtime.signal?.aborted
+    || runtime.currentCheck
+  ) return;
+
+  const check = checkAllMinecraftStatuses(
+    runtime.client,
+    runtime.environment,
+    runtime.signal,
+  );
+  runtime.currentCheck = check;
+  try {
+    await check;
+  } finally {
+    if (runtime.currentCheck === check) runtime.currentCheck = null;
+  }
+
+  scheduleStatusCheck(runtime);
+}
+
+export async function checkAllMinecraftStatuses(
+  client: Client,
+  environment: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
+): Promise<void> {
   try {
     const configs = await getAllMinecraftConfigs();
     for (const config of configs) {
-      if (!isMinecraftGuildEnabled(config.guildId)) continue;
+      if (signal?.aborted) return;
+      if (!isMinecraftGuildEnabled(config.guildId, environment)) continue;
       if (!config.statusChannelId) continue;
-      await refreshGuildMinecraftStatus(client, config.guildId);
+      await refreshGuildMinecraftStatus(client, config.guildId, environment, signal);
     }
   } catch (err) {
+    if (signal?.aborted) return;
     log.error('Ошибка при сборе статусов Minecraft-серверов', err);
   }
 }
 
-export async function refreshGuildMinecraftStatus(client: Client, guildId: string): Promise<MinecraftServerMetrics> {
+export async function refreshGuildMinecraftStatus(
+  client: Client,
+  guildId: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
+): Promise<MinecraftServerMetrics> {
   const configs = await getAllMinecraftConfigs();
   const config = configs.find((c) => c.guildId === guildId);
 
@@ -78,14 +147,14 @@ export async function refreshGuildMinecraftStatus(client: Client, guildId: strin
   const [host, portStr] = address.split(':');
   const port = portStr ? parseInt(portStr, 10) : 25565;
 
-  const pingResult = await pingMinecraftServer(host, port);
+  const pingResult = await pingMinecraftServer(host, port, 5000, signal);
 
   // Fetch real TPS via RCON. Unknown metrics remain unknown; never fabricate
   // an "excellent" value from TCP reachability alone.
   let tps: number | undefined;
 
-  if (pingResult.online) {
-    const tpsResult = await executeRconCommand('tps').catch(() => null);
+  if (pingResult.online && !signal?.aborted) {
+    const tpsResult = await executeRconCommand('tps', {}, environment).catch(() => null);
     if (tpsResult?.success && tpsResult.response) {
       tps = parseTpsResponse(tpsResult.response);
     }
@@ -103,8 +172,8 @@ export async function refreshGuildMinecraftStatus(client: Client, guildId: strin
     pingMs: pingResult.pingMs,
   };
 
-  if (config && config.statusChannelId) {
-    await updateStatusChannelEmbed(client, guildId, config, metrics);
+  if (config && config.statusChannelId && !signal?.aborted) {
+    await updateStatusChannelEmbed(client, guildId, config, metrics, signal);
   }
 
   return metrics;
@@ -115,11 +184,13 @@ async function updateStatusChannelEmbed(
   client: Client,
   guildId: string,
   config: any,
-  metrics: MinecraftServerMetrics
+  metrics: MinecraftServerMetrics,
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
+    if (signal?.aborted) return;
     const channel = (await client.channels.fetch(config.statusChannelId).catch(() => null)) as TextChannel | null;
-    if (!channel || !channel.isTextBased()) return;
+    if (signal?.aborted || !channel || !channel.isTextBased()) return;
 
     const statusEmbed = buildMinecraftStatusEmbed(metrics);
 
@@ -127,19 +198,21 @@ async function updateStatusChannelEmbed(
 
     if (config.statusMessageId) {
       const existingMessage = await channel.messages.fetch(config.statusMessageId).catch(() => null);
+      if (signal?.aborted) return;
       if (existingMessage) {
         await existingMessage.edit({ embeds: [statusEmbed] }).catch(() => {});
         messageUpdated = true;
       }
     }
 
-    if (!messageUpdated) {
+    if (!messageUpdated && !signal?.aborted) {
       const newMessage = await channel.send({ embeds: [statusEmbed] }).catch(() => null);
-      if (newMessage) {
+      if (newMessage && !signal?.aborted) {
         await updateMinecraftConfig(guildId, { statusMessageId: newMessage.id });
       }
     }
 
+    if (signal?.aborted) return;
     // Smart Alert logic
     const currentStatus = metrics.online
       ? (metrics.tps !== undefined && metrics.tps < ALERT_DEGRADED_TPS_THRESHOLD
@@ -158,13 +231,16 @@ async function updateStatusChannelEmbed(
 
       if (alertType) {
         const alertEmbed = buildMinecraftAlertEmbed(alertType, metrics.address);
+        if (signal?.aborted) return;
         await channel.send({ embeds: [alertEmbed] }).catch(() => {});
+        if (signal?.aborted) return;
         await updateMinecraftConfig(guildId, { lastStatus: currentStatus, lastAlertSentAt: new Date() });
       }
-    } else if (lastStatus !== currentStatus) {
+    } else if (lastStatus !== currentStatus && !signal?.aborted) {
       await updateMinecraftConfig(guildId, { lastStatus: currentStatus });
     }
   } catch (err) {
+    if (signal?.aborted) return;
     log.error(`Ошибка при обновлении статус-сообщения в гильдии ${guildId}`, err);
   }
 }
@@ -180,7 +256,12 @@ export function parseTpsResponse(response: string): number | undefined {
   return Math.min(20, parsed);
 }
 
-export async function pingMinecraftServer(host: string, port: number = 25565, timeoutMs: number = 5000): Promise<{
+export async function pingMinecraftServer(
+  host: string,
+  port: number = 25565,
+  timeoutMs: number = 5000,
+  signal?: AbortSignal,
+): Promise<{
   online: boolean;
   version?: string;
   playersOnline: number;
@@ -193,6 +274,7 @@ export async function pingMinecraftServer(host: string, port: number = 25565, ti
     const startTime = Date.now();
     const socket = new net.Socket();
     let isResolved = false;
+    let abortListener: (() => void) | null = null;
 
     const finish = (result: {
       online: boolean;
@@ -205,9 +287,19 @@ export async function pingMinecraftServer(host: string, port: number = 25565, ti
     }) => {
       if (isResolved) return;
       isResolved = true;
+      if (signal && abortListener) signal.removeEventListener('abort', abortListener);
       socket.destroy();
       resolve(result);
     };
+
+    abortListener = () => {
+      finish({ online: false, playersOnline: 0, playersMax: 64, playerList: [] });
+    };
+    if (signal?.aborted) {
+      abortListener();
+      return;
+    }
+    if (signal) signal.addEventListener('abort', abortListener, { once: true });
 
     socket.setTimeout(timeoutMs);
 

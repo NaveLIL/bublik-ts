@@ -8,7 +8,7 @@ import { Events } from 'discord.js';
 import { logger } from '../../../core/Logger';
 import { getAllMinecraftConfigs } from '../database';
 import { getDatabase } from '../../../core/Database';
-import { isMinecraftModuleConfigured } from '../constants';
+import { getMinecraftGuildId, isMinecraftModuleConfigured } from '../constants';
 import { executeRconCommand } from './rcon-service';
 import { isValidMinecraftJavaUsername } from './link-service';
 
@@ -29,22 +29,28 @@ export interface ChatBridgeOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   environment?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }
 
 interface ChatBridgeRuntime {
   client: Client;
+  environment: NodeJS.ProcessEnv;
+  preferredGuildId: string | null;
+  signal?: AbortSignal;
+  abortListener?: () => void;
   discordMessageListener: (...args: unknown[]) => void;
   poll: (client: Client) => Promise<ChatPollResult>;
   baseDelayMs: number;
   maxDelayMs: number;
   timer: NodeJS.Timeout | null;
   stopped: boolean;
-  pollInFlight: boolean;
+  currentPoll: Promise<void> | null;
+  messageTasks: Set<Promise<void>>;
   consecutiveFailures: number;
+  lastRoutingWarningKey: string | null;
 }
 
 let bridgeRuntime: ChatBridgeRuntime | null = null;
-let lastRoutingWarningKey: string | null = null;
 
 export function getChatPollDelayMs(
   consecutiveFailures: number,
@@ -95,103 +101,53 @@ export async function startChatBridge(
   client: Client,
   options: ChatBridgeOptions = {}
 ): Promise<boolean> {
-  stopChatBridge();
+  await stopChatBridge();
 
-  if (!isMinecraftModuleConfigured(options.environment)) {
+  const environment = options.environment ?? process.env;
+  if (!isMinecraftModuleConfigured(environment) || options.signal?.aborted) {
     log.warn('Кросс-чат отключён: Minecraft/RCON не настроен');
     return false;
   }
 
-  // --- Discord → Minecraft ---
-  const discordMessageListener = async (...args: unknown[]) => {
-    const msg = args[0] as Message;
-    if (msg.author.bot) return;
-    if (!msg.guildId) return;
-
-    try {
-      const configs = await getAllMinecraftConfigs();
-      const config = selectMinecraftChatConfig(configs);
-      if (
-        !config
-        || config.guildId !== msg.guildId
-        || config.chatChannelId !== msg.channelId
-      ) return;
-
-      const nick = msg.member?.displayName ?? msg.author.username;
-
-      // Build text content — handle attachments & stickers
-      let text = msg.content
-        .replace(/`/g, "'")
-        .substring(0, 180);
-
-      // Add attachment type indicators
-      if (msg.attachments.size > 0) {
-        const attParts: string[] = [];
-        for (const att of msg.attachments.values()) {
-          const ct = att.contentType ?? '';
-          if (ct.startsWith('image/')) attParts.push('[📷 фото]');
-          else if (ct.startsWith('video/')) attParts.push('[🎥 видео]');
-          else if (ct.startsWith('audio/')) attParts.push('[🎵 аудио]');
-          else attParts.push('[📎 файл]');
-        }
-        text = [text, ...attParts].filter(Boolean).join(' ');
-      }
-
-      // Add sticker indicator
-      if (msg.stickers.size > 0) {
-        text = [text, '[🎭 стикер]'].filter(Boolean).join(' ');
-      }
-
-      if (!text.trim()) return;
-
-      // Check for reply — show quoted excerpt in MC
-      let replyPart = '';
-      if (msg.reference?.messageId) {
-        try {
-          const replied = await msg.channel.messages.fetch(msg.reference.messageId);
-          if (replied) {
-            const replyAuthor = replied.member?.displayName ?? replied.author.username;
-            const replyText = replied.content
-              .replace(/`/g, "'")
-              .substring(0, 40);
-            replyPart = replyText
-              ? `↩ ${replyAuthor}: "${replyText}…" | `
-              : `↩ ${replyAuthor} | `;
-          }
-        } catch {
-          // Ignore if replied message not found
-        }
-      }
-
-      // Build tellraw payload
-      const tellraw = buildDiscordTellrawCommand(nick, text, replyPart);
-
-      const result = await executeRconCommand(tellraw);
-      if (result.success) {
-        log.info(`[ChatBridge] Discord → MC: <${nick}> ${replyPart}${text}`);
-      } else {
-        log.warn(`[ChatBridge] Discord → MC failed: ${result.error}`);
-      }
-
-    } catch (err) {
-      log.error('[ChatBridge] Discord → MC error', err);
-    }
-  };
-
-  client.on(Events.MessageCreate, discordMessageListener as Parameters<typeof client.on>[1]);
-
   const runtime: ChatBridgeRuntime = {
     client,
-    discordMessageListener,
-    poll: options.poll ?? pollMinecraftChat,
+    environment,
+    preferredGuildId: getMinecraftGuildId(environment),
+    signal: options.signal,
+    discordMessageListener: () => undefined,
+    poll: options.poll ?? ((pollClient) => pollMinecraftChat(
+      pollClient,
+      environment,
+      options.signal,
+    )),
     baseDelayMs: options.baseDelayMs ?? CHAT_POLL_BASE_DELAY_MS,
     maxDelayMs: options.maxDelayMs ?? CHAT_POLL_MAX_DELAY_MS,
     timer: null,
     stopped: false,
-    pollInFlight: false,
+    currentPoll: null,
+    messageTasks: new Set(),
     consecutiveFailures: 0,
+    lastRoutingWarningKey: null,
   };
+
+  // --- Discord → Minecraft ---
+  runtime.discordMessageListener = (...args: unknown[]) => {
+    const task = relayDiscordMessage(runtime, args[0] as Message);
+    runtime.messageTasks.add(task);
+    void task.finally(() => runtime.messageTasks.delete(task));
+  };
+
   bridgeRuntime = runtime;
+  if (options.signal) {
+    runtime.abortListener = () => {
+      void stopBridgeRuntime(runtime);
+    };
+    options.signal.addEventListener('abort', runtime.abortListener, { once: true });
+  }
+  client.on(
+    Events.MessageCreate,
+    runtime.discordMessageListener as Parameters<typeof client.on>[1],
+  );
 
   // --- Minecraft → Discord: poll the RCON chat queue file ---
   scheduleNextPoll(runtime, runtime.baseDelayMs);
@@ -200,28 +156,112 @@ export async function startChatBridge(
   return true;
 }
 
-export function stopChatBridge(): void {
-  const runtime = bridgeRuntime;
-  bridgeRuntime = null;
-  lastRoutingWarningKey = null;
+async function relayDiscordMessage(
+  runtime: ChatBridgeRuntime,
+  msg: Message,
+): Promise<void> {
+  if (runtime.stopped || runtime.signal?.aborted || msg.author.bot || !msg.guildId) return;
 
-  if (runtime) {
+  try {
+    const configs = await getAllMinecraftConfigs();
+    if (runtime.stopped || runtime.signal?.aborted) return;
+    const config = selectMinecraftChatConfig(configs, runtime.preferredGuildId);
+    if (
+      !config
+      || config.guildId !== msg.guildId
+      || config.chatChannelId !== msg.channelId
+    ) return;
+
+    const nick = msg.member?.displayName ?? msg.author.username;
+    let text = msg.content.replace(/`/g, "'").substring(0, 180);
+
+    if (msg.attachments.size > 0) {
+      const attachmentParts: string[] = [];
+      for (const attachment of msg.attachments.values()) {
+        const contentType = attachment.contentType ?? '';
+        if (contentType.startsWith('image/')) attachmentParts.push('[📷 фото]');
+        else if (contentType.startsWith('video/')) attachmentParts.push('[🎥 видео]');
+        else if (contentType.startsWith('audio/')) attachmentParts.push('[🎵 аудио]');
+        else attachmentParts.push('[📎 файл]');
+      }
+      text = [text, ...attachmentParts].filter(Boolean).join(' ');
+    }
+
+    if (msg.stickers.size > 0) {
+      text = [text, '[🎭 стикер]'].filter(Boolean).join(' ');
+    }
+    if (!text.trim()) return;
+
+    let replyPart = '';
+    if (msg.reference?.messageId) {
+      try {
+        const replied = await msg.channel.messages.fetch(msg.reference.messageId);
+        if (runtime.stopped || runtime.signal?.aborted) return;
+        if (replied) {
+          const replyAuthor = replied.member?.displayName ?? replied.author.username;
+          const replyText = replied.content.replace(/`/g, "'").substring(0, 40);
+          replyPart = replyText
+            ? `↩ ${replyAuthor}: "${replyText}…" | `
+            : `↩ ${replyAuthor} | `;
+        }
+      } catch {
+        // A deleted or inaccessible referenced message does not block relay.
+      }
+    }
+
+    if (runtime.stopped || runtime.signal?.aborted) return;
+    const result = await executeRconCommand(
+      buildDiscordTellrawCommand(nick, text, replyPart),
+      {},
+      runtime.environment,
+    );
+    if (result.success) {
+      log.info('[ChatBridge] Discord → MC delivered', {
+        author: msg.author.id,
+        length: text.length,
+      });
+    } else if (!runtime.stopped && !runtime.signal?.aborted) {
+      log.warn(`[ChatBridge] Discord → MC failed: ${result.error}`);
+    }
+  } catch (error) {
+    if (!runtime.stopped && !runtime.signal?.aborted) {
+      log.error('[ChatBridge] Discord → MC error', error);
+    }
+  }
+}
+
+async function stopBridgeRuntime(runtime: ChatBridgeRuntime): Promise<void> {
+  if (!runtime.stopped) {
     runtime.stopped = true;
+    if (bridgeRuntime === runtime) bridgeRuntime = null;
+    runtime.lastRoutingWarningKey = null;
     if (runtime.timer) {
       clearTimeout(runtime.timer);
       runtime.timer = null;
     }
+    if (runtime.signal && runtime.abortListener) {
+      runtime.signal.removeEventListener('abort', runtime.abortListener);
+    }
     runtime.client.off(
       Events.MessageCreate,
-      runtime.discordMessageListener as Parameters<typeof runtime.client.off>[1]
+      runtime.discordMessageListener as Parameters<typeof runtime.client.off>[1],
     );
   }
 
+  await Promise.allSettled([
+    ...(runtime.currentPoll ? [runtime.currentPoll] : []),
+    ...runtime.messageTasks,
+  ]);
   log.info('Кросс-чат мост остановлен');
 }
 
+export async function stopChatBridge(): Promise<void> {
+  const runtime = bridgeRuntime;
+  if (runtime) await stopBridgeRuntime(runtime);
+}
+
 function scheduleNextPoll(runtime: ChatBridgeRuntime, delayMs: number): void {
-  if (runtime.stopped || bridgeRuntime !== runtime) return;
+  if (runtime.stopped || bridgeRuntime !== runtime || runtime.signal?.aborted) return;
 
   runtime.timer = setTimeout(() => {
     runtime.timer = null;
@@ -230,20 +270,32 @@ function scheduleNextPoll(runtime: ChatBridgeRuntime, delayMs: number): void {
 }
 
 async function runScheduledPoll(runtime: ChatBridgeRuntime): Promise<void> {
-  if (runtime.stopped || bridgeRuntime !== runtime || runtime.pollInFlight) return;
+  if (
+    runtime.stopped
+    || bridgeRuntime !== runtime
+    || runtime.signal?.aborted
+    || runtime.currentPoll
+  ) return;
 
-  runtime.pollInFlight = true;
+  const poll = performScheduledPoll(runtime);
+  runtime.currentPoll = poll;
+  try {
+    await poll;
+  } finally {
+    if (runtime.currentPoll === poll) runtime.currentPoll = null;
+  }
+}
+
+async function performScheduledPoll(runtime: ChatBridgeRuntime): Promise<void> {
   let result: ChatPollResult = 'failure';
 
   try {
     result = await runtime.poll(runtime.client);
   } catch (error) {
     log.warn('[ChatBridge] Непредвиденная ошибка планировщика Minecraft-чата', error);
-  } finally {
-    runtime.pollInFlight = false;
   }
 
-  if (runtime.stopped || bridgeRuntime !== runtime) return;
+  if (runtime.stopped || bridgeRuntime !== runtime || runtime.signal?.aborted) return;
 
   if (result === 'failure') {
     runtime.consecutiveFailures += 1;
@@ -273,21 +325,28 @@ async function runScheduledPoll(runtime: ChatBridgeRuntime): Promise<void> {
 }
 
 // Read chat queue written by KubeJS to a tmp file via RCON exec trick
-async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
+async function pollMinecraftChat(
+  client: Client,
+  environment: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<ChatPollResult> {
   try {
     const configs = await getAllMinecraftConfigs();
+    if (signal?.aborted) return 'idle';
     const activeConfigs = configs.filter((config) => config.chatChannelId);
     if (activeConfigs.length === 0) return 'idle';
 
-    const config = selectMinecraftChatConfig(activeConfigs);
+    const preferredGuildId = getMinecraftGuildId(environment);
+    const config = selectMinecraftChatConfig(activeConfigs, preferredGuildId);
     if (!config) {
       const warningKey = [
-        process.env.MINECRAFT_GUILD_ID?.trim() || 'unset',
+        preferredGuildId || 'unset',
         ...activeConfigs.map((candidate) => candidate.guildId).sort(),
       ].join(':');
 
-      if (lastRoutingWarningKey !== warningKey) {
-        lastRoutingWarningKey = warningKey;
+      const runtime = bridgeRuntime;
+      if (runtime && runtime.lastRoutingWarningKey !== warningKey) {
+        runtime.lastRoutingWarningKey = warningKey;
         log.error(
           '[ChatBridge] MC → Discord остановлен: настроено несколько чат-каналов. '
           + 'Укажите MINECRAFT_GUILD_ID владельца RCON-сервера, чтобы исключить утечку сообщений между серверами.'
@@ -295,10 +354,14 @@ async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
       }
       return 'idle';
     }
-    lastRoutingWarningKey = null;
+    if (bridgeRuntime) bridgeRuntime.lastRoutingWarningKey = null;
 
     // Use RCON to read & flush the chat queue file
-    const readResult = await executeRconCommand('erezcraft_chat_flush');
+    const readResult = await executeRconCommand(
+      'erezcraft_chat_flush',
+      {},
+      environment,
+    );
     if (!readResult.success) return 'failure';
     if (!readResult.response?.trim()) return 'success';
 
@@ -308,6 +371,7 @@ async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
       .filter((l) => l.length > 0);
 
     for (const line of lines) {
+      if (signal?.aborted) return 'idle';
       // Expected format from KubeJS: "USERNAME|MESSAGE" or "REQUEST_BALANCE|USERNAME"
       const sep = line.indexOf('|');
       if (sep < 0) continue;
@@ -330,17 +394,19 @@ async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
               },
             },
           });
+          if (signal?.aborted) return 'idle';
 
           if (!account?.isLinked) {
             const tellraw = `tellraw ${targetUsername} ["",{"text":"⚠️ [EREZCRAFT] Ваш аккаунт не привязан к Discord! Привяжите командой /link","color":"red"}]`;
-            await executeRconCommand(tellraw).catch(() => {});
+            await executeRconCommand(tellraw, {}, environment).catch(() => {});
           } else {
             const profile = await db.economyProfile.findUnique({
               where: { guildId_userId: { guildId: account.guildId, userId: account.discordId } },
             });
+            if (signal?.aborted) return 'idle';
             const wallet = profile?.wallet ?? 0;
             const tellraw = `tellraw ${targetUsername} ["",{"text":"₪ [EREZCRAFT] Баланс: ","color":"gold"},{"text":"${wallet} ₪","color":"green","bold":true},{"text":" (Шекелей). Магазин: /mc shop в Discord","color":"gray"}]`;
-            await executeRconCommand(tellraw).catch(() => {});
+            await executeRconCommand(tellraw, {}, environment).catch(() => {});
           }
         } catch (err) {
           log.error('[ChatBridge] Error responding to REQUEST_BALANCE', err);
@@ -348,8 +414,9 @@ async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
         continue;
       }
 
+      if (signal?.aborted) return 'idle';
       const channel = (await client.channels.fetch(config.chatChannelId!).catch(() => null)) as TextChannel | null;
-      if (!channel || !channel.isTextBased()) continue;
+      if (signal?.aborted || !channel || !channel.isTextBased()) continue;
 
       await channel
         .send({
@@ -358,10 +425,14 @@ async function pollMinecraftChat(client: Client): Promise<ChatPollResult> {
         })
         .catch(() => {});
 
-      log.info(`[ChatBridge] MC → Discord: <${username}> ${message}`);
+      log.info('[ChatBridge] MC → Discord delivered', {
+        username: username.slice(0, 64),
+        length: message.length,
+      });
     }
     return 'success';
   } catch (error) {
+    if (signal?.aborted) return 'idle';
     log.warn('[ChatBridge] Ошибка опроса Minecraft-чата', error);
     return 'failure';
   }
