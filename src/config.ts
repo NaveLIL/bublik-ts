@@ -44,7 +44,7 @@ export const Config = {
 
   // ── Meta ───────────────────────────────────
   botName: 'Bublik',
-  botAuthor: 'NaveL',
+  botAuthor: 'NaveLIL',
   footer: '© NaveL for EREZ 2024–2026',
   nodeEnv: env('NODE_ENV', 'development'),
 
@@ -63,11 +63,11 @@ export const Config = {
   nsGuildId: process.env.NS_GUILD_ID || null,
   allowedGuilds: Array.from(
     new Set(
-      (process.env.ALLOWED_GUILDS ? process.env.ALLOWED_GUILDS.split(',') : ['1389991640151621643'])
+      (process.env.ALLOWED_GUILDS ?? '')
+        .split(',')
         .map((s) => s.trim())
-        .filter(Boolean)
-        .concat(['1389991640151621643'])
-    )
+        .filter(Boolean),
+    ),
   ),
 
   // ── Error Reporter ─────────────────

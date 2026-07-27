@@ -8,6 +8,8 @@ export interface PingerOccupancySummary {
   allFull: boolean;
 }
 
+export type PingerPopulationPhase = 'idle' | 'recruiting' | 'full';
+
 export interface PingerObservedSquad extends PingerSquadOccupancy {
   squadId: string;
   notifyOff: boolean;
@@ -42,6 +44,25 @@ export function summarizePingerOccupancy(
   };
 }
 
+/** Notification-disabled squads cannot trigger or block public recruiting. */
+export function selectPingerPopulationPhase(
+  notifyEnabledSquads: readonly PingerSquadOccupancy[],
+): PingerPopulationPhase {
+  if (summarizePingerOccupancy(notifyEnabledSquads).allFull) return 'full';
+  if (notifyEnabledSquads.some((squad) => squad.count < squad.size)) return 'recruiting';
+  return 'idle';
+}
+
+/** Final synchronous gate immediately before a FULL/reserve announcement. */
+export function canSendPingerFullSuggestion(
+  observedRevision: number,
+  requestedRevision: number,
+  notifyEnabledSquads: readonly PingerSquadOccupancy[],
+): boolean {
+  return requestedRevision === observedRevision &&
+    selectPingerPopulationPhase(notifyEnabledSquads) === 'full';
+}
+
 export function selectNotifyEnabledSquads<T extends { squadId: string }>(
   squads: readonly T[],
   notifyOffSquadIds: ReadonlySet<string>,
@@ -58,6 +79,23 @@ export type PingerLocalCooldownOutcome =
   | 'retained-without-send'
   | 'released'
   | 'ownership-lost';
+
+export type PingerClaimSettlement = 'finalize' | 'release' | 'ownership-lost';
+
+/**
+ * Release only explicit, harmless final-fence aborts. Unexpected failures before
+ * send retain the normal interval too; otherwise a persistent Discord/DB/config
+ * failure would be retried by every scheduler tick.
+ */
+export function selectPingerClaimSettlement(
+  sendAttempted: boolean,
+  ownershipLost: boolean,
+  retrySafeAbort: boolean,
+): PingerClaimSettlement {
+  if (sendAttempted) return 'finalize';
+  if (ownershipLost) return 'ownership-lost';
+  return retrySafeAbort ? 'release' : 'finalize';
+}
 
 /**
  * A released or superseded distributed claim did not perform this action and

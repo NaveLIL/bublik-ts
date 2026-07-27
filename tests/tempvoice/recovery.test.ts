@@ -5,6 +5,7 @@ import {
   isPendingVoiceSettlement,
   isTempVoiceRewardGrantPending,
   isUnknownChannelError,
+  MissingRewardRoleRetryGate,
   pendingVoiceSettlementKey,
 } from '../../src/modules/tempvoice/recovery';
 
@@ -63,4 +64,42 @@ test('pending settlement keys safely encode legacy session identifiers', () => {
     pendingVoiceSettlementKey(session.sessionId),
     'tempvoice:pending-settlement:guild%3Auser%2Fchannel%3Asession',
   );
+});
+
+test('missing TempVoice reward role quarantines one generator configuration', () => {
+  const gate = new MissingRewardRoleRetryGate(100, 800);
+  const key = 'guild:generator';
+
+  assert.equal(gate.canAttempt(key, 'deleted-role', 1_000), true);
+  const first = gate.quarantine(key, 'deleted-role', 1_000);
+  assert.deepEqual(first, {
+    roleId: 'deleted-role',
+    failures: 1,
+    retryAt: 1_100,
+  });
+  assert.equal(gate.canAttempt(key, 'deleted-role', 1_099), false);
+  assert.equal(gate.canAttempt(key, 'deleted-role', 1_100), true);
+});
+
+test('missing reward role retries use bounded exponential backoff', () => {
+  const gate = new MissingRewardRoleRetryGate(100, 400);
+  const key = 'guild:generator';
+
+  assert.equal(gate.quarantine(key, 'deleted-role', 1_000).retryAt, 1_100);
+  assert.equal(gate.quarantine(key, 'deleted-role', 2_000).retryAt, 2_200);
+  assert.equal(gate.quarantine(key, 'deleted-role', 3_000).retryAt, 3_400);
+  assert.equal(gate.quarantine(key, 'deleted-role', 4_000).retryAt, 4_400);
+});
+
+test('fixing reward role configuration bypasses quarantine immediately', () => {
+  const gate = new MissingRewardRoleRetryGate(10_000, 10_000);
+  const key = 'guild:generator';
+
+  gate.quarantine(key, 'deleted-role', 1_000);
+  assert.equal(gate.canAttempt(key, 'deleted-role', 1_001), false);
+  assert.equal(gate.canAttempt(key, 'replacement-role', 1_001), true);
+
+  gate.quarantine(key, 'replacement-role', 2_000);
+  gate.release(key, 'replacement-role');
+  assert.equal(gate.canAttempt(key, 'replacement-role', 2_001), true);
 });

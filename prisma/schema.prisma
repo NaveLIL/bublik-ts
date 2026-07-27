@@ -608,6 +608,7 @@ model VacationRequest {
   reviewerId      String?
   reviewMessageId String?
   savedRoleIds    String[]  @default([])
+  roleSnapshotAt  DateTime? // non-null once activation provenance is durably sealed
   startDate       DateTime?
   endDate         DateTime?
   reminderSent    Boolean   @default(false)
@@ -1074,4 +1075,3 @@ model MinecraftShopItem {
   @@index([guildId, isActive])
   @@map("minecraft_shop_items")
 }
-

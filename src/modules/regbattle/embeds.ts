@@ -12,7 +12,14 @@ import {
 } from 'discord.js';
 import { BublikEmbed } from '../../core/EmbedBuilder';
 import { i18n } from '../../core/I18n';
-import { RB_PREFIX, RB_SEP } from './constants';
+import {
+  FULL_SUGGEST_INTERVAL_MS,
+  INDIVIDUAL_PING_INTERVAL_MS,
+  RB_PREFIX,
+  RB_SEP,
+  ROLE_PING_INTERVAL_MS,
+} from './constants';
+import type { PbPingerDisplayStatus } from './pingerDisplayStatus';
 
 // ═══════════════════════════════════════════════
 //  Панель управления отрядом
@@ -48,7 +55,7 @@ export function buildControlPanelButtons(
   squadId: string,
   hasAir: boolean,
   locale: string,
-  notifyOff: boolean = false,
+  notificationsEnabled: boolean = true,
 ): ActionRowBuilder<ButtonBuilder>[] {
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -91,8 +98,8 @@ export function buildControlPanelButtons(
       .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId(`${RB_PREFIX}${RB_SEP}notifytoggle${RB_SEP}${squadId}`)
-      .setLabel(notifyOff ? i18n.t('regbattle.btn_notify_on', locale) : i18n.t('regbattle.btn_notify_off', locale))
-      .setStyle(notifyOff ? ButtonStyle.Success : ButtonStyle.Secondary),
+      .setLabel(notificationsEnabled ? i18n.t('regbattle.btn_notify_on', locale) : i18n.t('regbattle.btn_notify_off', locale))
+      .setStyle(notificationsEnabled ? ButtonStyle.Success : ButtonStyle.Secondary),
   );
 
   return [row1, row2, row3, row4];
@@ -434,12 +441,207 @@ export interface StatusPanelAbsentee {
   online: boolean;
 }
 
+const DISCORD_EMBED_FIELD_VALUE_LIMIT = 1_024;
+const DISCORD_EMBED_TOTAL_TEXT_LIMIT = 6_000;
+const DISCORD_EMBED_FIELD_COUNT_LIMIT = 25;
+
+interface StatusPanelField {
+  name: string;
+  value: string;
+}
+
+function chunkStatusPanelLines(lines: readonly string[]): string[] {
+  const chunks: string[] = [];
+  let current = '';
+  for (const rawLine of lines) {
+    const line = rawLine.length <= DISCORD_EMBED_FIELD_VALUE_LIMIT
+      ? rawLine
+      : `${rawLine.slice(0, DISCORD_EMBED_FIELD_VALUE_LIMIT - 1)}…`;
+    const candidate = current ? `${current}\n\n${line}` : line;
+    if (candidate.length > DISCORD_EMBED_FIELD_VALUE_LIMIT) {
+      if (current) chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function embedTextLength(embed: BublikEmbed): number {
+  const data = embed.toJSON();
+  return (data.title?.length ?? 0) +
+    (data.description?.length ?? 0) +
+    (data.author?.name.length ?? 0) +
+    (data.footer?.text.length ?? 0) +
+    (data.fields ?? []).reduce(
+      (sum, field) => sum + field.name.length + field.value.length,
+      0,
+    );
+}
+
+function moreSquadsKey(count: number, locale: string): string {
+  if (!locale.toLowerCase().startsWith('ru')) {
+    return count === 1
+      ? 'regbattle.status_more_squads_one'
+      : 'regbattle.status_more_squads_many';
+  }
+
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'regbattle.status_more_squads_one';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return 'regbattle.status_more_squads_few';
+  }
+  return 'regbattle.status_more_squads_many';
+}
+
+function buildStatusPanelSquadFields(
+  squadLines: readonly string[],
+  fieldName: string,
+  locale: string,
+  maxFields: number,
+  textBudget: number,
+): StatusPanelField[] {
+  if (maxFields <= 0 || textBudget <= 0) return [];
+
+  // Prefer complete squad blocks. If the installation has more squads than a
+  // single Discord embed can represent, keep the panel valid and show exactly
+  // how many additional squads were collapsed.
+  for (let visibleCount = squadLines.length; visibleCount >= 0; visibleCount--) {
+    const hiddenCount = squadLines.length - visibleCount;
+    const visibleLines = squadLines.slice(0, visibleCount);
+    if (hiddenCount > 0) {
+      visibleLines.push(
+        `*${i18n.t(moreSquadsKey(hiddenCount, locale), locale, { count: hiddenCount })}*`,
+      );
+    }
+
+    const chunks = chunkStatusPanelLines(visibleLines);
+    if (chunks.length > maxFields) continue;
+    const fields = chunks.map((value, index) => ({
+      name: index === 0 ? fieldName : `${fieldName} · ${index + 1}`,
+      value,
+    }));
+    const usedText = fields.reduce(
+      (sum, field) => sum + field.name.length + field.value.length,
+      0,
+    );
+    if (usedText <= textBudget) return fields;
+  }
+
+  return [];
+}
+
+function formatPositiveCount(value: number): number {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function buildPingerExclusionSummary(
+  status: PbPingerDisplayStatus,
+  locale: string,
+  translationKey = 'regbattle.status_exclusions',
+): string | null {
+  const parts: string[] = [];
+  const exclusions = status.exclusions;
+  const entries = [
+    ['vacation', exclusions.vacation],
+    ['played', exclusions.played],
+    ['in_pb', exclusions.inPb],
+    ['bot', exclusions.bot],
+  ] as const;
+
+  for (const [reason, rawCount] of entries) {
+    const count = formatPositiveCount(rawCount);
+    if (count > 0) {
+      parts.push(i18n.t(`regbattle.status_exclusion_${reason}`, locale, { count }));
+    }
+  }
+
+  return parts.length > 0
+    ? i18n.t(translationKey, locale, { items: parts.join(', ') })
+    : null;
+}
+
+function buildPingerStatusText(
+  status: PbPingerDisplayStatus,
+  locale: string,
+): string {
+  const roleMinutes = Math.max(1, Math.round(ROLE_PING_INTERVAL_MS / 60_000));
+  const individualSeconds = Math.max(1, Math.round(INDIVIDUAL_PING_INTERVAL_MS / 1_000));
+  const reserveMinutes = Math.max(1, Math.round(FULL_SUGGEST_INTERVAL_MS / 60_000));
+  let primary: string;
+
+  switch (status.mode) {
+    case 'disabled':
+      primary = i18n.t('regbattle.status_mode_disabled', locale);
+      break;
+    case 'role_mass':
+      primary = i18n.t('regbattle.status_mode_role_mass', locale, { minutes: roleMinutes });
+      break;
+    case 'individual_safe':
+      primary = status.reason === 'no_progress'
+        ? i18n.t('regbattle.status_mode_individual_no_progress', locale, {
+          count: status.noProgressCount,
+          seconds: individualSeconds,
+        })
+        : i18n.t('regbattle.status_mode_individual_safe', locale, {
+          count: status.eligibleIndividualCount,
+          seconds: individualSeconds,
+        });
+      break;
+    case 'cooldown':
+      primary = i18n.t('regbattle.status_mode_cooldown', locale);
+      break;
+    case 'full_role':
+      primary = i18n.t('regbattle.status_mode_full_role', locale, { minutes: reserveMinutes });
+      break;
+    case 'full_channel_only':
+      primary = i18n.t('regbattle.status_mode_full_channel_only', locale);
+      break;
+    case 'no_targets':
+      primary = i18n.t('regbattle.status_mode_no_targets', locale);
+      break;
+    case 'unavailable': {
+      let reasonKey = 'checking';
+      if (status.reason === 'ping_role_not_configured') reasonKey = 'ping_role_not_configured';
+      else if (status.reason === 'ping_role_missing') reasonKey = 'ping_role_missing';
+      else if (status.reason === 'reserve_channel_not_configured') {
+        reasonKey = 'reserve_channel_not_configured';
+      }
+      primary = i18n.t(`regbattle.status_mode_${reasonKey}`, locale);
+      break;
+    }
+  }
+
+  const details: string[] = [primary];
+  if (status.reason === 'mention_permission_missing') {
+    details.push(i18n.t('regbattle.status_reason_mention_permission', locale));
+  }
+  if (status.reason === 'unsafe_population' || status.reason === 'no_eligible_targets') {
+    const exclusions = buildPingerExclusionSummary(
+      status,
+      locale,
+      status.reason === 'no_eligible_targets'
+        ? 'regbattle.status_no_target_exclusions'
+        : 'regbattle.status_exclusions',
+    );
+    if (exclusions) details.push(exclusions);
+  }
+  return details
+    .flatMap((line) => line.split('\n'))
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
+
 export function buildStatusPanelEmbed(
   squads: StatusPanelSquad[],
   onlineIgnoring: StatusPanelAbsentee[],
   playedToday: { id: string; displayName: string }[],
   offlineAbsent: { id: string; displayName: string }[],
   locale: string,
+  pingerStatus: PbPingerDisplayStatus,
   onlineKosher = 0,
   totalKosher = 0,
 ): { embed: BublikEmbed; row: ActionRowBuilder<ButtonBuilder> } {
@@ -469,20 +671,47 @@ export function buildStatusPanelEmbed(
     );
   }
 
+  // Итого и прозрачный режим уведомлений
+  const notificationSquads = squads.filter((squad) => !squad.notifyOff);
+  const totalNeeded = notificationSquads.reduce(
+    (sum, squad) => sum + Math.max(0, squad.size - squad.count),
+    0,
+  );
+  const capacity = notificationSquads.length === 0
+    ? i18n.t('regbattle.status_capacity_disabled', locale)
+    : totalNeeded > 0
+      ? i18n.t('regbattle.status_capacity_needed', locale, { count: totalNeeded })
+      : i18n.t('regbattle.status_capacity_full', locale);
+  const notificationField: StatusPanelField = {
+    name: `🔔 ${i18n.t('regbattle.status_notifications_field', locale)}`,
+    value: `${buildPingerStatusText(pingerStatus, locale)}\n\n${capacity}`,
+  };
+
   if (squadLines.length > 0) {
-    embed.addFields({
-      name: `📋 ${i18n.t('regbattle.status_squads_field', locale)}`,
-      value: squadLines.join('\n\n'),
-    });
+    const existingFieldCount = embed.toJSON().fields?.length ?? 0;
+    const maxSquadFields = Math.max(
+      0,
+      DISCORD_EMBED_FIELD_COUNT_LIMIT - existingFieldCount - 1,
+    );
+    const squadTextBudget = Math.max(
+      0,
+      DISCORD_EMBED_TOTAL_TEXT_LIMIT - embedTextLength(embed) -
+        notificationField.name.length - notificationField.value.length,
+    );
+    const squadFields = buildStatusPanelSquadFields(
+      squadLines,
+      `📋 ${i18n.t('regbattle.status_squads_field', locale)}`,
+      locale,
+      maxSquadFields,
+      squadTextBudget,
+    );
+    embed.addFields(squadFields);
   }
 
-  // Итого
-  const totalNeeded = squads.reduce((sum, s) => sum + Math.max(0, s.size - s.count), 0);
-  if (totalNeeded > 0) {
-    embed.setFooter({ text: `🎯 ${i18n.t('regbattle.status_needed_footer', locale, { count: totalNeeded })}` });
-  } else {
-    embed.setFooter({ text: `✅ ${i18n.t('regbattle.status_full_footer', locale)}` });
-  }
+  embed.addFields({
+    name: notificationField.name,
+    value: notificationField.value,
+  });
 
   // ── Кнопки для деталей (label ≤ 80 символов по лимиту Discord) ──
   const redCount = onlineIgnoring.filter((a) => a.redZone).length;

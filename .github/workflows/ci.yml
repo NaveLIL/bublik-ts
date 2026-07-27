@@ -151,4 +151,4 @@ jobs:
           test "$(docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" --entrypoint node bublik-bot:ci scripts/verify-baseline-target.js)" = "already-applied"
           image_postflight="$RUNNER_TEMP/bublik-image-postflight.json"
           docker run --rm --network host -e DATABASE_URL="$DATABASE_URL" --entrypoint node bublik-bot:ci scripts/snapshot-baseline-data.js --postflight > "$image_postflight"
-          node -e 'const fs=require("node:fs");const report=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(report.status!=="ok"||report.checks.length!==31||report.checks.some(check=>check.violations!=="0")||report.skippedChecks.length!==0)process.exit(1)' "$image_postflight"
+          node -e 'const fs=require("node:fs");const gate=require("./scripts/snapshot-baseline-data.js");const report=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));const expected=gate.expectedPostflightCheckIds(report.schema);if(report.status!=="ok"||JSON.stringify(report.checks.map(check=>check.id))!==JSON.stringify(expected)||report.checks.some(check=>check.violations!=="0")||report.skippedChecks.length!==0)process.exit(1)' "$image_postflight"

@@ -25,6 +25,16 @@ export interface PbPingPolicy {
   pbChannelIds: ReadonlySet<string>;
 }
 
+export type PbIndividualPingEligibilityReason =
+  | 'eligible'
+  | 'unavailable_state'
+  | 'vacation'
+  | 'bot'
+  | 'ping_role_not_configured'
+  | 'missing_ping_role'
+  | 'played'
+  | 'in_pb';
+
 export interface PbMassRoleMentionPlan {
   content: string;
   allowedMentions: {
@@ -105,12 +115,30 @@ export function isPbIndividualPingEligible(
   policy: PbPingPolicy,
   snapshot: PbPingEligibilitySnapshot | null,
 ): boolean {
-  if (isPbVacationExcluded(candidate, snapshot)) return false;
-  if (candidate.isBot || !policy.pingRoleId) return false;
-  if (!candidate.roleIds.has(policy.pingRoleId)) return false;
-  if (policy.playedTodayRoleId && candidate.roleIds.has(policy.playedTodayRoleId)) return false;
-  if (candidate.voiceChannelId && policy.pbChannelIds.has(candidate.voiceChannelId)) return false;
-  return true;
+  return classifyPbIndividualPingEligibility(candidate, policy, snapshot) === 'eligible';
+}
+
+/**
+ * Returns the first reason an individual PB ping must not be sent. Keeping the
+ * classification next to the send policy lets status panels explain the same
+ * fail-closed decision without reimplementing it.
+ */
+export function classifyPbIndividualPingEligibility(
+  candidate: PbPingCandidate,
+  policy: PbPingPolicy,
+  snapshot: PbPingEligibilitySnapshot | null,
+): PbIndividualPingEligibilityReason {
+  if (!snapshot || snapshot.guildId !== candidate.guildId) return 'unavailable_state';
+  if (
+    snapshot.excludedUserIds.has(candidate.userId) ||
+    (snapshot.vacationRoleId && candidate.roleIds.has(snapshot.vacationRoleId))
+  ) return 'vacation';
+  if (candidate.isBot) return 'bot';
+  if (!policy.pingRoleId) return 'ping_role_not_configured';
+  if (!candidate.roleIds.has(policy.pingRoleId)) return 'missing_ping_role';
+  if (policy.playedTodayRoleId && candidate.roleIds.has(policy.playedTodayRoleId)) return 'played';
+  if (candidate.voiceChannelId && policy.pbChannelIds.has(candidate.voiceChannelId)) return 'in_pb';
+  return 'eligible';
 }
 
 /** Shared fail-closed vacation predicate for pings, panels and role workflows. */

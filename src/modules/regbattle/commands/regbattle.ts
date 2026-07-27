@@ -24,6 +24,7 @@ import { successEmbed, errorEmbed } from '../../../core/EmbedBuilder';
 import { i18n } from '../../../core/I18n';
 import { getGuildLocale } from '../../../core/GuildConfig';
 import { withMemberRoleLock } from '../../../core/MemberRoleLock';
+import { getDatabase } from '../../../core/Database';
 import {
   evaluateRolePolicy,
   fetchRolePolicySubject,
@@ -46,6 +47,8 @@ import {
   refreshStatusPanel,
   teardownSquadIntegration,
 } from '../lifecycle';
+import { withVacationRoleConfigLock } from '../../vacation/roleConfigLock';
+import { reprimandTypeRoleConflictsWithProtectedRole } from '../safety';
 
 const log = logger.child('RegBattle:Command');
 
@@ -342,7 +345,6 @@ async function handleSetup(
     });
     return;
   }
-
   const data: Record<string, any> = {};
   if (master) data.masterChannelId = master.id;
   if (category) data.categoryId = category.id;
@@ -358,8 +360,96 @@ async function handleSetup(
   if (reprimandChannel) data.reprimandChannelId = reprimandChannel.id;
   if (reprimandDuration !== null) data.reprimandDurationDays = reprimandDuration;
 
-  const config = await upsertConfig(guildId, data);
-  const isNew = !existing;
+  let config: Awaited<ReturnType<typeof upsertConfig>>;
+  let isNew: boolean;
+  if (pingRole || inSquadRole || playedRole) {
+    await interaction.deferReply({ ephemeral: true });
+    const mutation = await withVacationRoleConfigLock(guildId, async (configLock) => {
+      const [freshExisting, vacation] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      const freshCoreRoles = {
+        pingRoleId: pingRole?.id ?? freshExisting?.pingRoleId ?? null,
+        inSquadRoleId: inSquadRole?.id ?? freshExisting?.inSquadRoleId ?? null,
+        playedTodayRoleId: playedRole?.id ?? freshExisting?.playedTodayRoleId ?? null,
+      };
+      const freshCoreRoleIds = Object.values(freshCoreRoles).filter(
+        (roleId): roleId is string => Boolean(roleId),
+      );
+      if (new Set(freshCoreRoleIds).size !== freshCoreRoleIds.length) return null;
+      if (
+        vacation?.vacationRoleId &&
+        freshCoreRoleIds.includes(vacation.vacationRoleId)
+      ) return null;
+      if (freshExisting?.reprimandTypeRoleIds.some((roleId) =>
+        reprimandTypeRoleConflictsWithProtectedRole(
+          roleId,
+          freshCoreRoles,
+          vacation?.vacationRoleId ?? null,
+        ))) return null;
+      if (pingRole && freshExisting?.pingRoleId !== pingRole.id) {
+        const [regularLiveCount, nsLiveCount] = await Promise.all([
+          getDatabase().vacationRequest.count({
+            where: {
+              guildId,
+              status: { in: ['activating', 'active', 'restoring'] },
+            },
+          }),
+          getDatabase().nsVacation.count({
+            where: {
+              guildId,
+              type: { in: ['shield', 'troll'] },
+              status: { in: ['activating', 'active', 'restoring'] },
+            },
+          }),
+        ]);
+        if (regularLiveCount + nsLiveCount > 0) {
+          return { liveVacationCount: regularLiveCount + nsLiveCount } as const;
+        }
+      }
+      await configLock.assertOwned();
+      return {
+        config: await upsertConfig(guildId, data),
+        isNew: !freshExisting,
+      };
+    });
+    if (!mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('regbattle.error_core_role_conflicts_protected', locale))],
+      });
+      return;
+    }
+    if ('liveVacationCount' in mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('regbattle.error_ping_role_change_live', locale, {
+          count: mutation.liveVacationCount ?? 0,
+        }))],
+      });
+      return;
+    }
+    ({ config, isNew } = mutation);
+  } else {
+    const finalPingRoleId = existing?.pingRoleId ?? null;
+    const vacation = finalPingRoleId
+      ? await getDatabase().vacationConfig.findUnique({
+        where: { guildId },
+        select: { vacationRoleId: true },
+      })
+      : null;
+    if (vacation?.vacationRoleId === finalPingRoleId) {
+      await interaction.reply({
+        embeds: [errorEmbed(i18n.t('regbattle.error_core_role_conflicts_protected', locale))],
+        ephemeral: true,
+      });
+      return;
+    }
+    config = await upsertConfig(guildId, data);
+    isNew = !existing;
+  }
   const changed = (key: string) => data[key] !== undefined ? ' ✏️' : '';
 
   const action = isNew
@@ -370,7 +460,7 @@ async function handleSetup(
     ? i18n.t('regbattle.setup_duration_days', locale, { n: config.reprimandDurationDays })
     : i18n.t('regbattle.setup_duration_indefinite', locale);
 
-  await interaction.reply({
+  const response = {
     embeds: [successEmbed(
       i18n.t('regbattle.setup_success_title', locale, { action }) + `\n\n` +
       `> ${i18n.t('regbattle.setup_field_master', locale)} ${config.masterChannelId ? `<#${config.masterChannelId}>` : nv}${changed('masterChannelId')}\n` +
@@ -388,8 +478,9 @@ async function handleSetup(
       `> ${i18n.t('regbattle.setup_field_reprimand_duration', locale)} ${durText}${changed('reprimandDurationDays')}\n` +
       (isNew ? `\n${i18n.t('regbattle.setup_next_steps', locale)}` : ''),
     )],
-    ephemeral: true,
-  });
+  };
+  if (interaction.deferred) await interaction.editReply(response);
+  else await interaction.reply({ ...response, ephemeral: true });
 
   if (interaction.guild) {
     await refreshStatusPanel(interaction.guild, client, true);
@@ -430,8 +521,48 @@ async function handleAddRole(interaction: ChatInputCommandInteraction, locale: s
     return;
   }
 
-  const updated = [...current, role.id];
-  await upsertConfig(guildId, { [field]: updated });
+  let updated: string[];
+  if (type === 'reprimand_type') {
+    await interaction.deferReply({ ephemeral: true });
+    const mutation = await withVacationRoleConfigLock(guildId, async (configLock) => {
+      const [freshConfig, vacation] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      if (!freshConfig) throw new Error('RegBattle configuration disappeared');
+      if (reprimandTypeRoleConflictsWithProtectedRole(
+        role.id,
+        freshConfig,
+        vacation?.vacationRoleId ?? null,
+      )) return null;
+      if (freshConfig.reprimandTypeRoleIds.includes(role.id)) {
+        return { alreadyConfigured: true } as const;
+      }
+      const next = [...freshConfig.reprimandTypeRoleIds, role.id];
+      await configLock.assertOwned();
+      await upsertConfig(guildId, { reprimandTypeRoleIds: next });
+      return { updated: next } as const;
+    });
+    if (!mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('regbattle.error_reprimand_role_conflicts_protected', locale))],
+      });
+      return;
+    }
+    if ('alreadyConfigured' in mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('regbattle.addrole_already', locale, { role: `<@&${role.id}>` }))],
+      });
+      return;
+    }
+    updated = mutation.updated;
+  } else {
+    updated = [...current, role.id];
+    await upsertConfig(guildId, { [field]: updated });
+  }
 
   const typeLabels: Record<string, string> = {
     commander: i18n.t('regbattle.type_label_commander', locale),
@@ -441,12 +572,13 @@ async function handleAddRole(interaction: ChatInputCommandInteraction, locale: s
   };
 
   const list = updated.map((id) => `<@&${id}>`).join(', ');
-  await interaction.reply({
+  const response = {
     embeds: [successEmbed(
       i18n.t('regbattle.addrole_success', locale, { role: `<@&${role.id}>`, type: typeLabels[type], list }),
     )],
-    ephemeral: true,
-  });
+  };
+  if (interaction.deferred) await interaction.editReply(response);
+  else await interaction.reply({ ...response, ephemeral: true });
 }
 
 // ═══════════════════════════════════════════════

@@ -10,6 +10,7 @@ import {
   LIVE_REPRIMAND_STATUSES,
   TRANSITIONAL_REPRIMAND_STATUSES,
 } from './safety';
+import { firstFreeSquadNumber } from './squadNumbering';
 
 const CACHE_PREFIX = 'rb:cfg';
 const CACHE_TTL = 600; // 10 минут
@@ -73,9 +74,7 @@ export async function createSquadWithAllocatedNumber(data: {
           select: { number: true },
           orderBy: { number: 'asc' },
         });
-        const used = new Set(existing.map((row) => row.number));
-        let number = 1;
-        while (used.has(number)) number++;
+        const number = firstFreeSquadNumber(existing.map((row) => row.number));
         return tx.regbattleSquad.create({
           data: { ...data, number },
           include: { config: true },

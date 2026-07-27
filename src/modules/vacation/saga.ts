@@ -1,13 +1,14 @@
 import type { NsVacation, VacationConfig, VacationRequest } from '@prisma/client';
-import type { GuildMember } from 'discord.js';
+import { PermissionFlagsBits, type GuildMember } from 'discord.js';
 import { VacationStatus } from './constants';
 import { type MemberRoleLock, withMemberRoleLock } from '../../core/MemberRoleLock';
 import { getDatabase } from '../../core/Database';
 import {
-  appendLiveVacationSavedRole,
   appendLiveNsVacationSavedRole,
+  findLiveRoleVacationForMember,
   getNsVacation,
   getRequest,
+  sealVacationRoleSnapshot,
   transitionNsVacation,
   transitionRequest,
 } from './database';
@@ -17,7 +18,15 @@ import {
   saveVoiceSession,
   suppressSessionForVacation,
 } from '../regbattle/voiceSessions';
-import { isNsInformationalVacation } from './state';
+import {
+  buildVacationRoleSnapshot,
+  buildVacationSuppressedRoleIds,
+  hasExactPbPingRoleProvenance,
+  isNsInformationalVacation,
+  planVacationRoleIntegrity,
+  vacationRoleConfigurationIsDistinct,
+} from './state';
+import { withVacationRoleConfigLock } from './roleConfigLock';
 
 type VacationWithConfig = VacationRequest & { config: VacationConfig };
 
@@ -25,33 +34,38 @@ async function refreshMember(member: GuildMember): Promise<GuildMember> {
   return member.guild.members.fetch({ user: member.id, force: true });
 }
 
-async function persistCurrentPbPingRole(
+async function sealOrLoadVacationRoleSnapshot(
   request: VacationWithConfig,
   member: GuildMember,
-): Promise<VacationWithConfig> {
+): Promise<{ request: VacationWithConfig; pingRoleId: string | null }> {
   const config = await getDatabase().regbattleConfig.findUnique({
     where: { guildId: request.guildId },
-    select: { pingRoleId: true },
+    select: { pingRoleId: true, inSquadRoleId: true, playedTodayRoleId: true },
   });
   const pingRoleId = config?.pingRoleId ?? null;
+  if (!vacationRoleConfigurationIsDistinct(request.config.vacationRoleId, [
+    pingRoleId,
+    config?.inSquadRoleId ?? null,
+    config?.playedTodayRoleId ?? null,
+  ])) {
+    throw new Error('Vacation role and RegBattle core roles must be different');
+  }
+  if (request.roleSnapshotAt) return { request, pingRoleId };
+  if (request.status !== VacationStatus.Activating) {
+    throw new Error(`Vacation ${request.id} has no sealed role snapshot`);
+  }
+
   const pbSession = pingRoleId ? await getVoiceSession(request.guildId, request.userId) : null;
-  const hasDurablePingProvenance = Boolean(
-    pingRoleId &&
-    pbSession?.version === 2 &&
-    (pbSession.hadPingRole || pbSession.playedResetRoleIds.includes(pingRoleId)),
-  );
-  if (
-    !pingRoleId ||
-    (!member.roles.cache.has(pingRoleId) && !hasDurablePingProvenance) ||
-    request.savedRoleIds.includes(pingRoleId)
-  ) {
-    return request;
-  }
-  const updated = await appendLiveVacationSavedRole(request.id, pingRoleId);
-  if (!updated || !updated.savedRoleIds.includes(pingRoleId)) {
-    throw new Error(`Vacation ${request.id} could not persist PB ping-role provenance`);
-  }
-  return updated;
+  const hasDurablePingProvenance = hasExactPbPingRoleProvenance(pbSession, pingRoleId);
+  const savedRoleIds = buildVacationRoleSnapshot({
+    currentRoleIds: member.roles.cache.keys(),
+    configuredRemoveRoleIds: request.config.removeRoleIds,
+    pingRoleId,
+    vacationRoleId: request.config.vacationRoleId,
+    hasProvenPbPingProvenance: hasDurablePingProvenance,
+  });
+  const sealed = await sealVacationRoleSnapshot(request.id, savedRoleIds);
+  return { request: sealed, pingRoleId };
 }
 
 async function persistNsPbPingRole(record: NsVacation): Promise<NsVacation> {
@@ -61,11 +75,7 @@ async function persistNsPbPingRole(record: NsVacation): Promise<NsVacation> {
   });
   const pingRoleId = config?.pingRoleId ?? null;
   const session = pingRoleId ? await getVoiceSession(record.guildId, record.userId) : null;
-  const hasProvenance = Boolean(
-    pingRoleId &&
-    session?.version === 2 &&
-    (session.hadPingRole || session.playedResetRoleIds.includes(pingRoleId)),
-  );
+  const hasProvenance = hasExactPbPingRoleProvenance(session, pingRoleId);
   if (!pingRoleId || !hasProvenance || record.savedRoleIds.includes(pingRoleId)) return record;
   const updated = await appendLiveNsVacationSavedRole(record.id, pingRoleId);
   if (!updated || !updated.savedRoleIds.includes(pingRoleId)) {
@@ -107,13 +117,21 @@ async function activateVacationLocked(
   }
 
   const freshMember = await refreshMember(member);
-  const durable = await persistCurrentPbPingRole(current, freshMember);
+  const sealed = await sealOrLoadVacationRoleSnapshot(current, freshMember);
+  const durable = sealed.request;
   await freezePbSessionForVacation(
     freshMember,
     durable.startDate?.getTime() ?? Date.now(),
     lock,
   );
-  await applyVacationRoles(freshMember, durable.savedRoleIds, durable.config.vacationRoleId, lock);
+  const suppressedRoleIds = buildVacationSuppressedRoleIds(
+    durable.savedRoleIds,
+    freshMember.roles.cache.keys(),
+    durable.config.removeRoleIds,
+    sealed.pingRoleId,
+    durable.config.vacationRoleId,
+  );
+  await applyVacationRoles(freshMember, suppressedRoleIds, durable.config.vacationRoleId, lock);
   const activated = await transitionRequest(durable.id, VacationStatus.Activating, {
     status: VacationStatus.Active,
   });
@@ -148,15 +166,97 @@ export async function reconcileActiveVacationRoles(
       return activateVacationLocked(current, member, lock);
     }
     if (current.status !== VacationStatus.Active) return current;
+    if (!current.roleSnapshotAt) {
+      throw new Error(`Vacation ${current.id} has no sealed role snapshot`);
+    }
     const freshMember = await refreshMember(member);
-    const durable = await persistCurrentPbPingRole(current, freshMember);
+    const sealed = await sealOrLoadVacationRoleSnapshot(current, freshMember);
+    const durable = sealed.request;
     await freezePbSessionForVacation(
       freshMember,
       durable.startDate?.getTime() ?? Date.now(),
       lock,
     );
-    await applyVacationRoles(freshMember, durable.savedRoleIds, durable.config.vacationRoleId, lock);
+    const suppressedRoleIds = buildVacationSuppressedRoleIds(
+      durable.savedRoleIds,
+      freshMember.roles.cache.keys(),
+      durable.config.removeRoleIds,
+      sealed.pingRoleId,
+      durable.config.vacationRoleId,
+    );
+    await applyVacationRoles(freshMember, suppressedRoleIds, durable.config.vacationRoleId, lock);
     return durable;
+  });
+}
+
+/**
+ * Remove a stale/manual vacation role only when PostgreSQL still confirms that
+ * no role-bearing vacation is active. An activation that races this check is
+ * serialized by the same member lock and reapplies the authoritative state.
+ */
+export async function removeStaleVacationRole(
+  member: GuildMember,
+  vacationRoleId: string,
+): Promise<boolean> {
+  return withVacationRoleConfigLock(member.guild.id, async (configLock) => {
+    return withMemberRoleLock(member.guild.id, member.id, async (memberLock) => {
+      await configLock.assertOwned();
+      await memberLock.assertOwned();
+      const hasLiveVacation = Boolean(
+        await findLiveRoleVacationForMember(member.guild.id, member.id),
+      );
+      if (hasLiveVacation) return false;
+
+      const freshMember = await refreshMember(member);
+      const plan = planVacationRoleIntegrity(
+        hasLiveVacation,
+        false,
+        freshMember.roles.cache.has(vacationRoleId),
+      );
+      if (!plan.removeVacationRole) return false;
+      const [vacationRole, botMember] = await Promise.all([
+        member.guild.roles.fetch(vacationRoleId, { force: true }),
+        member.guild.members.fetch({ user: member.client.user.id, force: true }),
+      ]);
+      if (
+        !vacationRole || vacationRole.id === member.guild.id || vacationRole.managed ||
+        !vacationRole.editable || !botMember.permissions.has(PermissionFlagsBits.ManageRoles)
+      ) {
+        throw new Error(`Vacation role ${vacationRoleId} is not removable by the bot`);
+      }
+
+      // Re-read both mutable configurations after every external lookup and
+      // immediately before Discord removal. Setup paths share configLock;
+      // direct/legacy collisions therefore fail closed instead of stripping
+      // what may actually be the manually assigned PB ping role.
+      await configLock.assertOwned();
+      const [vacationConfig, regbattleConfig] = await Promise.all([
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId: member.guild.id },
+          select: { vacationRoleId: true },
+        }),
+        getDatabase().regbattleConfig.findUnique({
+          where: { guildId: member.guild.id },
+          select: { pingRoleId: true, inSquadRoleId: true, playedTodayRoleId: true },
+        }),
+      ]);
+      if (vacationConfig?.vacationRoleId !== vacationRoleId) return false;
+      if (!vacationRoleConfigurationIsDistinct(vacationRoleId, [
+        regbattleConfig?.pingRoleId ?? null,
+        regbattleConfig?.inSquadRoleId ?? null,
+        regbattleConfig?.playedTodayRoleId ?? null,
+      ])) {
+        throw new Error('Vacation integrity refused a PB core-role collision');
+      }
+      await configLock.assertOwned();
+      await memberLock.assertOwned();
+      await freshMember.roles.remove(
+        vacationRole,
+        'Vacation integrity: no active vacation',
+      );
+      await memberLock.assertOwned();
+      return true;
+    });
   });
 }
 
@@ -164,24 +264,47 @@ export async function restoreVacation(
   request: VacationWithConfig,
   member: GuildMember,
 ): Promise<VacationWithConfig> {
-  return withMemberRoleLock(request.guildId, request.userId, async (lock) => {
-    const current = await getRequest(request.id);
-    if (current?.status === VacationStatus.Completed) return current;
-    if (!current || current.status !== VacationStatus.Restoring) {
-      throw new Error(`Vacation ${request.id} is no longer restoring`);
-    }
-    const freshMember = await refreshMember(member);
-    await lock.assertOwned();
-    await restoreRoles(freshMember, current.savedRoleIds, current.config.vacationRoleId, lock);
-    const completed = await transitionRequest(current.id, VacationStatus.Restoring, {
-      status: VacationStatus.Completed,
+  return withVacationRoleConfigLock(request.guildId, async (configLock) => {
+    const regbattleConfig = await getDatabase().regbattleConfig.findUnique({
+      where: { guildId: request.guildId },
+      select: { pingRoleId: true, inSquadRoleId: true, playedTodayRoleId: true },
     });
-    if (completed) return completed;
-    const latest = await getRequest(current.id);
-    if (latest?.status === VacationStatus.Completed) return latest;
-    // Never roll back to ACTIVE after an outcome-ambiguous Discord response.
-    // REST recovery can safely retry the desired restoring end state.
-    throw new Error(`Vacation ${current.id} completion CAS lost`);
+    await configLock.assertOwned();
+    const pingRoleId = regbattleConfig?.pingRoleId ?? null;
+
+    return withMemberRoleLock(request.guildId, request.userId, async (lock) => {
+      const current = await getRequest(request.id);
+      if (current?.status === VacationStatus.Completed) return current;
+      if (!current || current.status !== VacationStatus.Restoring) {
+        throw new Error(`Vacation ${request.id} is no longer restoring`);
+      }
+      if (!vacationRoleConfigurationIsDistinct(current.config.vacationRoleId, [
+        pingRoleId,
+        regbattleConfig?.inSquadRoleId ?? null,
+        regbattleConfig?.playedTodayRoleId ?? null,
+      ])) {
+        throw new Error('Vacation restore refused a PB core-role collision');
+      }
+      await configLock.assertOwned();
+      const freshMember = await refreshMember(member);
+      await lock.assertOwned();
+      await restoreRoles(
+        freshMember,
+        current.savedRoleIds,
+        current.config.vacationRoleId,
+        lock,
+        pingRoleId,
+      );
+      const completed = await transitionRequest(current.id, VacationStatus.Restoring, {
+        status: VacationStatus.Completed,
+      });
+      if (completed) return completed;
+      const latest = await getRequest(current.id);
+      if (latest?.status === VacationStatus.Completed) return latest;
+      // Never roll back to ACTIVE after an outcome-ambiguous Discord response.
+      // REST recovery can safely retry the desired restoring end state.
+      throw new Error(`Vacation ${current.id} completion CAS lost`);
+    });
   });
 }
 

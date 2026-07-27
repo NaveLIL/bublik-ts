@@ -11,6 +11,7 @@ import { getGuildLocale } from '../../../core/GuildConfig';
 import { getOrCreatePendingRaid, getEcoConfig } from '../database';
 import { startRaidForGuild, drainAllLeftUsers } from '../raid';
 import { getDatabase } from '../../../core/Database';
+import { getCompleteGuildMembers } from '../../../core/GuildMemberSnapshot';
 
 const raidCommand: BublikCommand = {
   category: 'economy',
@@ -136,7 +137,7 @@ const raidCommand: BublikCommand = {
         return;
       }
 
-      await interaction.guild?.members.fetch().catch(() => null);
+      await getCompleteGuildMembers(interaction.guild!);
 
       let successCount = 0;
       for (const p of profiles) {

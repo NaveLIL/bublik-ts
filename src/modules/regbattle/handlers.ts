@@ -39,6 +39,9 @@ import { getRedis } from '../../core/Redis';
 import { i18n } from '../../core/I18n';
 import { getGuildLocale } from '../../core/GuildConfig';
 import { fetchSafeAutomaticRole, hasDangerousAssignablePermissions } from '../../core/RolePolicy';
+import { getCompleteGuildMembers } from '../../core/GuildMemberSnapshot';
+import { getDatabase } from '../../core/Database';
+import { withMemberRoleLock } from '../../core/MemberRoleLock';
 
 import {
   RB_PREFIX,
@@ -89,20 +92,33 @@ import {
 
 import {
   updateControlPanel,
-  toggleNotify,
+  toggleNotifications,
   refreshStatusPanel,
   getStatusPanelData,
   deleteTrackedChannel,
 } from './lifecycle';
+import {
+  applyNotifyToggle,
+  runForCurrentNotifyControlPanel,
+  type CurrentNotifyControlPanelResult,
+  type NotifyToggleOutcome,
+  type NotifyToggleProjection,
+} from './notifyToggle';
 import { recalculatePinger } from './pinger';
 import { fetchGuildMemberIfPresent, isTransientInteractionError } from '../../utils/helpers';
-import { isUnknownChannelError, isUnknownMessageError } from './safety';
+import {
+  isUnknownChannelError,
+  isUnknownMessageError,
+  reprimandTypeRoleConflictsWithProtectedRole,
+} from './safety';
 import {
   consumeDmPingPreviewAndClaim,
   createDmPingPreviewToken,
   dmPingCooldownSecondsLeft,
   finalizeDmPingCooldown,
   isDmPingPreviewToken,
+  MAX_DM_PING_PREVIEW_TARGETS,
+  serializeDmPingPreviewEnvelope,
 } from './dmPingCooldown';
 import {
   type OrdersMuteRecord,
@@ -115,6 +131,7 @@ import {
   updateOrdersMuteRecord,
 } from './ordersMutes';
 import {
+  isPbRoleMutationSuppressed,
   isPbIndividualPingEligible,
   loadPbPingEligibilitySnapshot,
   pbPingCandidateFromMember,
@@ -872,7 +889,7 @@ async function handleDmPingModal(
     return;
   }
 
-  const members = await guild.members.fetch();
+  const members = await getCompleteGuildMembers(guild);
   const roleMembers = members.filter((member) => member.roles.cache.has(config.pingRoleId));
   const pbChannelIds = new Set(await getAllPbChannelIds(guild.id));
   if (config.reserveChannelId) pbChannelIds.add(config.reserveChannelId);
@@ -894,12 +911,26 @@ async function handleDmPingModal(
     await interaction.editReply({ embeds: [rbWarn(i18n.t('regbattle.dmping_no_targets', locale), locale)] });
     return;
   }
+  if (targets.size > MAX_DM_PING_PREVIEW_TARGETS) {
+    await interaction.editReply({
+      embeds: [rbError(i18n.t('regbattle.dmping_too_many_targets', locale, {
+        count: targets.size,
+        max: MAX_DM_PING_PREVIEW_TARGETS,
+      }), locale)],
+    });
+    return;
+  }
 
-  // Сохраняем текст в Redis (TTL 5 мин) для чтения при подтверждении
+  // Сохраняем nonce-bound preview с точным списком адресатов (TTL 5 мин)
   const r = getRedis();
   const previewToken = createDmPingPreviewToken();
   const msgKey = `rb:dmmsg:${squadId}:${interaction.user.id}:${previewToken}`;
-  await r.setex(msgKey, 300, customMessage);
+  const previewEnvelope = serializeDmPingPreviewEnvelope(
+    previewToken,
+    customMessage,
+    [...targets.keys()],
+  );
+  await r.setex(msgKey, 300, previewEnvelope);
 
   // Стандартный ли текст?
   const defaultText = i18n.t('regbattle.dmping_embed_desc', locale, {
@@ -967,16 +998,9 @@ async function handleDmPingConfirm(
     return;
   }
 
-  // Забрать текст из Redis
+  // The nonce-bound envelope is consumed atomically below. A legacy preview
+  // containing only message text deliberately expires without sending.
   const msgKey = `rb:dmmsg:${squadId}:${interaction.user.id}:${previewToken}`;
-  const previewMessage = await r.get(msgKey);
-  if (!previewMessage) {
-    await interaction.update({
-      embeds: [rbError(i18n.t('regbattle.dmping_expired', locale), locale)],
-      components: [],
-    });
-    return;
-  }
 
   // deferUpdate — чтобы editReply работал для прогресса
   await interaction.deferUpdate();
@@ -995,40 +1019,13 @@ async function handleDmPingConfirm(
     return;
   }
 
-  const members = await guild.members.fetch();
-  const roleMembers = members.filter((member) => member.roles.cache.has(config.pingRoleId));
-  const pbChannelIds = new Set(await getAllPbChannelIds(guild.id));
-  if (config.reserveChannelId) pbChannelIds.add(config.reserveChannelId);
-  const eligibility = await loadPbPingEligibilitySnapshot(
-    guild.id,
-    [...roleMembers.keys()],
-  );
-  const policy = {
-    pingRoleId: config.pingRoleId,
-    playedTodayRoleId: config.playedTodayRoleId,
-    pbChannelIds,
-  };
-  const targets = roleMembers.filter((member) => isPbIndividualPingEligible(
-    pbPingCandidateFromMember(member),
-    policy,
-    eligibility,
-  ));
-
-  if (targets.size === 0) {
-    await interaction.editReply({
-      embeds: [rbWarn(i18n.t('regbattle.dmping_no_targets', locale), locale)],
-      components: [],
-    });
-    return;
-  }
-
   // The NX claim is the authoritative cooldown gate. The earlier GET is only
   // a fast user-facing check and cannot serialize two concurrent confirms.
   const previewClaim = await consumeDmPingPreviewAndClaim(
     r,
     cooldownKey,
     msgKey,
-    targets.size,
+    previewToken,
   );
   if (previewClaim.status === 'cooldown') {
     const activeCooldown = await r.get(cooldownKey);
@@ -1047,11 +1044,12 @@ async function handleDmPingConfirm(
     });
     return;
   }
-  const { claim: cooldownClaim, message: customMessage } = previewClaim;
+  const { claim: cooldownClaim, preview } = previewClaim;
+  const { message: customMessage, targetIds } = preview;
 
   // Показать начало рассылки
   await interaction.editReply({
-    embeds: [buildDmPingProgress(0, targets.size, locale)],
+    embeds: [buildDmPingProgress(0, targetIds.length, locale)],
     components: [],
   });
 
@@ -1061,7 +1059,6 @@ async function handleDmPingConfirm(
   let skipped = 0;
   let hadAmbiguousSend = false;
   const PROGRESS_UPDATE_EVERY = 5;
-  const targetIds = [...targets.keys()];
 
   for (let targetIndex = 0; targetIndex < targetIds.length; targetIndex++) {
     const memberId = targetIds[targetIndex];
@@ -1119,10 +1116,10 @@ async function handleDmPingConfirm(
 
     // Обновление прогресса каждые N отправок
     const total = delivered.length + failed.length + skipped;
-    if (total % PROGRESS_UPDATE_EVERY === 0 && total < targets.size) {
+    if (total % PROGRESS_UPDATE_EVERY === 0 && total < targetIds.length) {
       try {
         await interaction.editReply({
-          embeds: [buildDmPingProgress(total, targets.size, locale)],
+          embeds: [buildDmPingProgress(total, targetIds.length, locale)],
         });
       } catch { /* прогресс не критичен */ }
     }
@@ -1481,26 +1478,47 @@ async function removeReprimandTypeRoleIfUnused(
   reprimand: any,
   reason: string,
 ): Promise<boolean> {
-  if (await hasOtherLiveReprimand(
-    reprimand.id,
-    reprimand.guildId,
-    reprimand.offenderId,
-    reprimand.typeRoleId,
-  )) return true;
-
-  let fetchError: unknown = null;
-  const offender = guild.members.cache.get(reprimand.offenderId) ??
-    await guild.members.fetch(reprimand.offenderId).catch((error: unknown) => {
-      fetchError = error;
-      return null;
-    });
-  if (!offender) return !fetchError || (fetchError as any).code === 10007;
-  if (!offender.roles.cache.has(reprimand.typeRoleId)) return true;
   try {
-    await offender.roles.remove(reprimand.typeRoleId, reason);
-    return true;
+    return await withMemberRoleLock(guild.id, reprimand.offenderId, async (lock) => {
+      const [currentConfig, vacationConfig] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId: guild.id } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId: guild.id },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      // A legacy/drifted record must never strip a manually assigned protected
+      // role during rollback or annulment. Finalise the record without treating
+      // that protected role as owned by the reprimand.
+      if (!currentConfig || reprimandTypeRoleConflictsWithProtectedRole(
+        reprimand.typeRoleId,
+        currentConfig,
+        vacationConfig?.vacationRoleId ?? null,
+      )) return true;
+      if (await hasOtherLiveReprimand(
+        reprimand.id,
+        reprimand.guildId,
+        reprimand.offenderId,
+        reprimand.typeRoleId,
+      )) return true;
+
+      let fetchError: unknown = null;
+      const offender = await guild.members.fetch({
+        user: reprimand.offenderId,
+        force: true,
+      }).catch((error: unknown) => {
+        fetchError = error;
+        return null;
+      });
+      if (!offender) return !fetchError || (fetchError as any).code === 10007;
+      if (!offender.roles.cache.has(reprimand.typeRoleId)) return true;
+      await lock.assertOwned();
+      await offender.roles.remove(reprimand.typeRoleId, reason);
+      await lock.assertOwned();
+      return true;
+    });
   } catch (error) {
-    log.warn(`Не удалось снять роль выговора у ${offender.user.tag}`, { error: String(error) });
+    log.warn(`Не удалось снять роль выговора у ${reprimand.offenderId}`, { error: String(error) });
     return false;
   }
 }
@@ -1554,22 +1572,54 @@ async function handleReprimandModal(
     ? new Date(Date.now() + config.reprimandDurationDays * 24 * 60 * 60 * 1000)
     : null;
 
-  const reprimand = await createReprimand({
-    guildId: guild.id,
-    offenderId,
-    issuerId: interaction.user.id,
-    typeRoleId,
-    reason,
-    channelId: config.reprimandChannelId,
-    expiresAt,
-    status: 'granting',
-  });
-
+  let reprimand: Awaited<ReturnType<typeof createReprimand>>;
   try {
-    const safeTypeRole = await fetchSafeAutomaticRole(guild, typeRoleId);
-    await offender.roles.add(safeTypeRole, `Выговор: ${reason.slice(0, 100)}`);
+    reprimand = await withMemberRoleLock(guild.id, offenderId, async (lock) => {
+      const freshOffender = await guild.members.fetch({ user: offenderId, force: true });
+      const [freshConfig, vacationConfig] = await Promise.all([
+        getDatabase().regbattleConfig.findUnique({ where: { guildId: guild.id } }),
+        getDatabase().vacationConfig.findUnique({
+          where: { guildId: guild.id },
+          select: { vacationRoleId: true },
+        }),
+      ]);
+      if (
+        !freshConfig ||
+        !freshConfig.reprimandTypeRoleIds.includes(typeRoleId) ||
+        reprimandTypeRoleConflictsWithProtectedRole(
+          typeRoleId,
+          freshConfig,
+          vacationConfig?.vacationRoleId ?? null,
+        )
+      ) {
+        throw new Error('Reprimand type role conflicts with a protected PB/vacation role');
+      }
+      if (await isPbRoleMutationSuppressed(freshOffender)) {
+        throw new Error('Reprimand role grant is suppressed while the member is on vacation');
+      }
+
+      const created = await createReprimand({
+        guildId: guild.id,
+        offenderId,
+        issuerId: interaction.user.id,
+        typeRoleId,
+        reason,
+        channelId: config.reprimandChannelId,
+        expiresAt,
+        status: 'granting',
+      });
+      try {
+        const safeTypeRole = await fetchSafeAutomaticRole(guild, typeRoleId);
+        await lock.assertOwned();
+        await freshOffender.roles.add(safeTypeRole, `Выговор: ${reason.slice(0, 100)}`);
+        await lock.assertOwned();
+        return created;
+      } catch (error) {
+        await deleteReprimandStatusCas(created.id, ['granting']);
+        throw error;
+      }
+    });
   } catch (err) {
-    await deleteReprimandStatusCas(reprimand.id, ['granting']);
     log.warn(`Не удалось выдать роль выговора ${typeName} для ${offender.user.tag}`, { error: String(err) });
     await interaction.editReply({ embeds: [rbError('Не удалось выдать роль взыскания; операция отменена без изменения состояния.', locale)] });
     return;
@@ -2509,36 +2559,123 @@ async function handleNotifyToggle(
   const squad = await checkOwner(interaction, squadId, locale);
   if (!squad) return;
 
-  await interaction.deferReply({ flags: 64 });
+  let guardedResult: CurrentNotifyControlPanelResult<NotifyToggleOutcome>;
+  try {
+    guardedResult = await runForCurrentNotifyControlPanel(
+      squad.panelMessageId,
+      interaction.message.id,
+      async () => {
+        await interaction.deferReply({ flags: 64 });
+        return applyNotifyToggle(
+          squadId,
+          () => toggleNotifications(squadId),
+          (notificationsEnabled) => {
+            const projections: NotifyToggleProjection[] = [
+              {
+                name: 'pinger',
+                run: () => recalculatePinger(interaction.guildId!),
+              },
+              {
+                name: 'control-panel',
+                run: async () => {
+                  const buttons = buildControlPanelButtons(
+                    squadId,
+                    !!squad.airChannelId,
+                    locale,
+                    notificationsEnabled,
+                  );
+                  await interaction.message.edit({ components: buttons });
+                },
+              },
+            ];
 
-  const nowOff = await toggleNotify(squadId);
-
-  // Обновить кнопки панели управления
-  const config = await getConfig(interaction.guildId!);
-  if (config) {
-    const buttons = buildControlPanelButtons(squadId, !!squad.airChannelId, locale, nowOff);
-    try {
-      const vc = interaction.guild?.channels.cache.get(squad.voiceChannelId) as any;
-      if (vc && squad.panelMessageId) {
-        const panelMsg = await vc.messages.fetch(squad.panelMessageId).catch(() => null);
-        if (panelMsg) {
-          await panelMsg.edit({ components: buttons });
-        }
-      }
-    } catch { /* skip */ }
+            if (interaction.guild) {
+              projections.push({
+                name: 'status-panel',
+                run: () => refreshStatusPanel(interaction.guild!, client, true),
+              });
+            }
+            return projections;
+          },
+        );
+      },
+    );
+  } catch (error) {
+    log.error(`Не удалось сохранить настройку уведомлений отряда ${squadId}`, {
+      error: String(error),
+    });
+    const errorPayload = {
+      embeds: [rbError(i18n.t('regbattle.notify_toggle_failed', locale), locale)],
+    };
+    const response = interaction.deferred || interaction.replied
+      ? interaction.editReply(errorPayload)
+      : interaction.reply({ ...errorPayload, flags: 64 });
+    await response.catch((replyError) => {
+      log.warn('Не удалось сообщить об ошибке переключения уведомлений', {
+        error: String(replyError),
+      });
+    });
+    return;
   }
 
-  // Обновить статус-панель рекрутинга
-  if (interaction.guild) {
-    await refreshStatusPanel(interaction.guild, client);
+  if (guardedResult.status === 'stale-panel') {
+    await interaction.reply({
+      embeds: [rbWarn(i18n.t('regbattle.notify_stale_panel', locale), locale)],
+      flags: 64,
+    }).catch((error) => {
+      log.warn(`Не удалось сообщить об устаревшей панели отряда ${squadId}`, {
+        error: String(error),
+      });
+    });
+    await interaction.message.edit({ components: [] }).catch((error) => {
+      log.warn(`Не удалось очистить устаревшую панель отряда ${squadId}`, {
+        error: String(error),
+      });
+    });
+    return;
   }
 
-  // Пересчитать пингер (чтобы фаза обновилась)
-  recalculatePinger(interaction.guildId!);
+  const outcome = guardedResult.value;
 
-  const key = nowOff ? 'regbattle.notify_toggled_off' : 'regbattle.notify_toggled_on';
+  for (const failure of outcome.projectionFailures) {
+    log.warn(`Настройка уведомлений сохранена, но проекция ${failure.name} не обновилась`, {
+      error: String(failure.error),
+      squadId,
+    });
+  }
+
+  if (
+    interaction.guild &&
+    outcome.projectionFailures.some((failure) => failure.name === 'control-panel')
+  ) {
+    const repairTimer = setTimeout(() => {
+      void getSquad(squadId)
+        .then((freshSquad) => freshSquad && updateControlPanel(freshSquad, interaction.guild!, client))
+        .catch((error) => {
+          log.warn(`Повторное обновление панели уведомлений отряда ${squadId} не удалось`, {
+            error: String(error),
+          });
+        });
+    }, 1_000);
+    repairTimer.unref?.();
+  }
+
+  const key = outcome.notificationsEnabled
+    ? 'regbattle.notify_toggled_on'
+    : 'regbattle.notify_toggled_off';
+  const confirmation = i18n.t(key, locale);
+  const hasDelayedProjection = outcome.projectionFailures.length > 0;
+  const responseText = hasDelayedProjection
+    ? `${confirmation}\n\n${i18n.t('regbattle.notify_sync_delayed', locale)}`
+    : confirmation;
   await interaction.editReply({
-    embeds: [rbSuccess(i18n.t(key, locale), locale)],
+    embeds: [hasDelayedProjection ? rbWarn(responseText, locale) : rbSuccess(responseText, locale)],
+  }).catch((error) => {
+    // The setting is already committed. A Discord response failure must not be
+    // reclassified by the outer router as a failed notification toggle.
+    log.warn(`Настройка уведомлений отряда ${squadId} сохранена без подтверждения`, {
+      error: String(error),
+    });
   });
 }
 
@@ -2553,7 +2690,7 @@ async function handleStatusPanelButton(
 ): Promise<void> {
   if (!interaction.guild) return;
 
-  // guild.members.fetch() может быть >3с → defer чтобы Discord не отклонил
+  // Полный снимок участников может ждать gateway → сначала defer
   await interaction.deferReply({ flags: 64 });
 
   try {

@@ -4,6 +4,7 @@ import test from 'node:test';
 const {
   FINGERPRINT_ALGORITHM,
   POSTFLIGHT_FORMAT,
+  POSTFLIGHT_PROFILE,
   SNAPSHOT_CONSISTENCY,
   SNAPSHOT_FORMAT,
   assertValidSnapshot,
@@ -11,6 +12,7 @@ const {
   compareSnapshots,
   createSnapshot,
   createPostflightReport,
+  expectedPostflightCheckIds,
   hardeningSchemaRequirements,
   migrationSpecs,
   parseArguments,
@@ -29,10 +31,14 @@ const {
   parseBaselineCatalog,
 } = require('../scripts/verify-baseline-target');
 
-function validSnapshot(schema = 'public') {
+function validSnapshot(
+  schema = 'public',
+  profile: 'migration' | 'operational' = POSTFLIGHT_PROFILE.MIGRATION,
+) {
   const tableColumns = tableColumnsFromCatalog(parseBaselineCatalog());
   return {
     format: SNAPSHOT_FORMAT,
+    profile,
     status: 'ok',
     baseline: { migration: BASELINE, sha256: BASELINE_SHA256 },
     schema,
@@ -40,7 +46,7 @@ function validSnapshot(schema = 'public') {
     consistency: { ...SNAPSHOT_CONSISTENCY },
     tableCount: tableColumns.size,
     sequenceCount: parseBaselineCatalog().sequences.length,
-    invariants: preflightCheckDefinitions(schema).map(({ id }: { id: string }) => ({
+    invariants: preflightCheckDefinitions(schema, profile).map(({ id }: { id: string }) => ({
       id,
       violations: '0',
     })),
@@ -65,6 +71,7 @@ test('pure snapshot comparator accepts identical complete baseline snapshots', (
     format: 'bublik-baseline-data-comparison/v1',
     status: 'identical',
     baseline: { migration: BASELINE, sha256: BASELINE_SHA256 },
+    profile: 'migration',
     schema: 'public',
     tableCount: 40,
     sequenceCount: 1,
@@ -145,6 +152,47 @@ test('snapshot validation fails closed for missing tables or failed invariants',
   );
 });
 
+test('operational snapshot records and validates its exact durable invariant profile', () => {
+  const operational = validSnapshot('public', POSTFLIGHT_PROFILE.OPERATIONAL);
+  assert.equal(assertValidSnapshot(operational), operational);
+  assert.deepEqual(
+    operational.invariants.map((check: { id: string }) => check.id),
+    preflightCheckDefinitions('public', POSTFLIGHT_PROFILE.OPERATIONAL)
+      .map(({ id }: { id: string }) => id),
+  );
+
+  const contaminated = structuredClone(operational);
+  contaminated.invariants.push({ id: 'vacations_cross_table_live_role_overlap', violations: '0' });
+  assert.throws(
+    () => assertValidSnapshot(contaminated),
+    /complete baseline-data preflight/,
+  );
+
+  const profileComparison = compareSnapshots(validSnapshot(), operational);
+  assert.equal(profileComparison.status, 'different');
+  assert.deepEqual(profileComparison.differences, [{
+    field: 'profile',
+    before: 'migration',
+    after: 'operational',
+  }]);
+});
+
+test('legacy v2 snapshot without profile is copied and normalized as strict migration evidence', () => {
+  const legacy = validSnapshot();
+  delete legacy.profile;
+  const normalized = assertValidSnapshot(legacy);
+  assert.notEqual(normalized, legacy);
+  assert.equal(Object.hasOwn(legacy, 'profile'), false);
+  assert.equal(normalized.profile, POSTFLIGHT_PROFILE.MIGRATION);
+
+  const unlabeledOperational = validSnapshot('public', POSTFLIGHT_PROFILE.OPERATIONAL);
+  delete unlabeledOperational.profile;
+  assert.throws(
+    () => assertValidSnapshot(unlabeledOperational),
+    /complete baseline-data preflight/,
+  );
+});
+
 test('fingerprint SQL quotes every identifier and aggregates canonical JSON in PostgreSQL', () => {
   const query = buildFingerprintQuery('odd"schema', 'table"name', ['z"column', 'a']);
   assert.match(query, /"odd""schema"\."table""name"/);
@@ -174,10 +222,27 @@ test('CLI parser has exclusive snapshot, preflight, postflight and compare modes
   assert.deepEqual(parseArguments(['--postflight', '--output', 'postflight.json']), {
     mode: 'postflight', output: 'postflight.json', before: null, after: null,
   });
+  assert.deepEqual(parseArguments(['--postflight-operational', '--output', 'operational.json']), {
+    mode: 'postflight-operational', output: 'operational.json', before: null, after: null,
+  });
+  assert.deepEqual(parseArguments(['--preflight-operational']), {
+    mode: 'preflight-operational', output: null, before: null, after: null,
+  });
+  assert.deepEqual(parseArguments(['--snapshot-operational']), {
+    mode: 'snapshot-operational', output: null, before: null, after: null,
+  });
   assert.deepEqual(parseArguments(['--compare', 'before.json', 'after.json']), {
     mode: 'compare', output: null, before: 'before.json', after: 'after.json',
   });
   assert.throws(() => parseArguments(['--preflight', '--snapshot']), /exactly one mode/);
+  assert.throws(
+    () => parseArguments(['--postflight', '--postflight-operational']),
+    /exactly one mode/,
+  );
+  assert.throws(
+    () => parseArguments(['--snapshot-operational', '--preflight-operational']),
+    /exactly one mode/,
+  );
   assert.throws(() => parseArguments(['--compare', 'before.json']), /requires two snapshot/);
 });
 
@@ -194,6 +259,7 @@ test('postflight schema requirements cover every hardening relation and critical
   for (const key of [
     'team_members.guildId',
     'vacation_requests.activeKey',
+    'vacation_requests.roleSnapshotAt',
     'ns_vacations.activeKey',
     'team_applications.activeKey',
     'team_sessions.squadVoiceId',
@@ -227,18 +293,30 @@ function validMigrationHistory(baselineSteps: 0 | 1) {
   return specs.map((spec: { name: string; sha256: string }, index: number) => ({
     migration_name: spec.name,
     checksum: spec.sha256,
-    started_at: new Date(`2026-07-19T22:54:${index ? '29' : '26'}.000Z`),
-    finished_at: new Date(`2026-07-19T22:54:${index ? '30' : '27'}.000Z`),
+    started_at: new Date(Date.UTC(2026, 6, 19, 22, 54, 26 + index * 3)),
+    finished_at: new Date(Date.UTC(2026, 6, 19, 22, 54, 27 + index * 3)),
     rolled_back_at: null,
     logs: null,
     applied_steps_count: index === 0 ? baselineSteps : 1,
   }));
 }
 
-test('postflight accepts both resolved and freshly-applied baseline history, with hardening at one step', () => {
+test('postflight accepts the complete audited migration history', () => {
   assert.deepEqual(validateLocalMigrationFiles(), []);
   assert.deepEqual(validateMigrationHistoryRows(validMigrationHistory(0)), []);
   assert.deepEqual(validateMigrationHistoryRows(validMigrationHistory(1)), []);
+});
+
+test('postflight accepts retrospective Minecraft foundation adoption on production', () => {
+  const history = validMigrationHistory(0);
+  history[3].started_at = new Date('2026-07-27T00:00:00.000Z');
+  history[3].finished_at = new Date('2026-07-27T00:00:01.000Z');
+  history[4].started_at = new Date('2026-07-24T18:35:00.000Z');
+  history[4].finished_at = new Date('2026-07-24T18:35:01.000Z');
+  history[5].started_at = new Date('2026-07-27T00:00:02.000Z');
+  history[5].finished_at = new Date('2026-07-27T00:00:03.000Z');
+
+  assert.deepEqual(validateMigrationHistoryRows(history), []);
 });
 
 test('postflight migration history rejects unknown, reordered, rolled-back and modified rows', () => {
@@ -257,7 +335,7 @@ test('postflight migration history rejects unknown, reordered, rolled-back and m
     applied_steps_count: 0,
   });
   const differences = validateMigrationHistoryRows(damaged).join('\n');
-  assert.match(differences, /expected exactly 2/);
+  assert.match(differences, /expected exactly 6/);
   assert.match(differences, /unknown migration history row/);
   assert.match(differences, /rolled-back migration history row is forbidden/);
   assert.match(differences, /unfinished migration history row/);
@@ -287,6 +365,7 @@ test('postflight semantic checks are schema-qualified and cover every critical b
   assert.deepEqual(checks.map(({ id }: { id: string }) => id), [
     'team_members_parent_guild_backfill',
     'vacation_requests_active_key_semantics',
+    'vacation_requests_live_role_snapshot_sealed',
     'ns_vacations_active_key_semantics',
     'team_applications_active_key_semantics',
     'team_polls_active_key_semantics',
@@ -317,6 +396,83 @@ test('postflight semantic checks are schema-qualified and cover every critical b
   const initialPolls = checks.find(({ id }: { id: string }) => id === 'team_polls_new_columns_initial_values');
   assert.match(initialPolls.query, /"notifiedKeys" IS DISTINCT FROM ARRAY\[\]::TEXT\[\]/);
   assert.match(initialPolls.query, /"uiClosedAt" IS NOT NULL/);
+});
+
+test('operational postflight keeps strict migration checks and uses durable allowlists', () => {
+  const strictChecks = postflightCheckDefinitions('odd"schema');
+  const operationalChecks = postflightCheckDefinitions(
+    'odd"schema',
+    POSTFLIGHT_PROFILE.OPERATIONAL,
+  );
+  assert.ok(strictChecks.some(({ id }: { id: string }) => (
+    id === 'operation_claims_initially_empty'
+  )));
+  assert.ok(!operationalChecks.some(({ id }: { id: string }) => (
+    id === 'operation_claims_initially_empty'
+  )));
+
+  const integrity = operationalChecks.find(({ id }: { id: string }) => (
+    id === 'operation_claims_runtime_integrity'
+  ));
+  assert.ok(integrity);
+  assert.match(integrity.query, /"odd""schema"\."operation_claims"/);
+  assert.match(integrity.query, /btrim\("key"\) = ''/);
+  assert.match(integrity.query, /btrim\("scope"\) = ''/);
+  assert.match(integrity.query, /"expiresAt" < "createdAt"/);
+
+  assert.deepEqual(
+    preflightCheckDefinitions('public', POSTFLIGHT_PROFILE.OPERATIONAL)
+      .map(({ id }: { id: string }) => id),
+    [
+      'team_members_orphans',
+      'team_members_duplicate_guild_user',
+      'regbattle_squads_duplicate_guild_number',
+      'regbattle_squads_duplicate_guild_owner',
+      'vacation_requests_duplicate_live',
+      'ns_vacations_duplicate_live_slot',
+      'team_applications_duplicate_actionable',
+      'team_polls_duplicate_active',
+      'economy_raids_duplicate_live',
+    ],
+  );
+  assert.deepEqual(
+    operationalChecks.map(({ id }: { id: string }) => id),
+    [
+      'team_members_parent_guild_backfill',
+      'vacation_requests_active_key_semantics',
+      'vacation_requests_live_role_snapshot_runtime_integrity',
+      'ns_vacations_active_key_semantics',
+      'team_polls_active_key_semantics',
+      'economy_raids_active_key_semantics',
+      'operation_claims_runtime_integrity',
+      'team_polls_dedup_key_backfill',
+    ],
+  );
+  const roleSnapshot = operationalChecks.find(({ id }: { id: string }) => (
+    id === 'vacation_requests_live_role_snapshot_runtime_integrity'
+  ));
+  assert.ok(roleSnapshot);
+  assert.match(roleSnapshot.query, /'active', 'restoring'/);
+  assert.doesNotMatch(roleSnapshot.query, /activating/);
+
+  const strictIds = expectedPostflightCheckIds('public');
+  const operationalIds = expectedPostflightCheckIds(
+    'public',
+    POSTFLIGHT_PROFILE.OPERATIONAL,
+  );
+  assert.ok(strictIds.length > operationalIds.length);
+  assert.ok(strictIds.includes('operation_claims_initially_empty'));
+  assert.ok(!strictIds.includes('operation_claims_runtime_integrity'));
+  assert.ok(operationalIds.includes('operation_claims_runtime_integrity'));
+  assert.ok(!operationalIds.includes('operation_claims_initially_empty'));
+  assert.throws(
+    () => postflightCheckDefinitions('public', 'unknown'),
+    /Unsupported postflight profile/,
+  );
+  assert.throws(
+    () => preflightCheckDefinitions('public', 'unknown'),
+    /Unsupported preflight profile/,
+  );
 });
 
 test('database URL parsing is strict and never guesses after malformed input', () => {

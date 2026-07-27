@@ -23,6 +23,7 @@ const entrypointPath = path.join(repositoryRoot, 'scripts', 'entrypoint.sh');
 const baselineVerifierPath = path.join(repositoryRoot, 'scripts', 'verify-baseline-target.js');
 const exporterPath = path.join(repositoryRoot, 'scripts', 'export-public-distribution.js');
 const publicVerifierPath = path.join(repositoryRoot, 'scripts', 'verify-public-distribution.js');
+const ciWorkflowPath = path.join(repositoryRoot, '.github', 'workflows', 'ci.yml');
 
 const { buildPrismaDiffArguments } = require('../scripts/verify-baseline-target.js') as {
   buildPrismaDiffArguments(): string[];
@@ -122,6 +123,17 @@ test('runtime migration controls fail closed and use only the vendored Prisma CL
   assert.ok(entrypoint.indexOf('case "$migrate_only"') < entrypoint.indexOf('applying db schema'));
 });
 
+test('production image postflight derives the exact check contract from the data gate', () => {
+  const workflow = readFileSync(ciWorkflowPath, 'utf8');
+
+  assert.match(workflow, /expectedPostflightCheckIds\(report\.schema\)/);
+  assert.doesNotMatch(workflow, /report\.checks\.length\s*!==\s*\d+/);
+  assert.match(
+    workflow,
+    /JSON\.stringify\(report\.checks\.map\(check=>check\.id\)\)!==JSON\.stringify\(expected\)/,
+  );
+});
+
 test('Prisma drift verification keeps database credentials out of child argv and errors', () => {
   const sentinel = 'sentinel-password-must-not-enter-argv';
   const previous = process.env.DATABASE_URL;
@@ -197,7 +209,7 @@ test('target preflight rejects an owned destination junction before touching its
   mkdirSync(external);
   writeFileSync(sentinel, 'must survive\n', 'utf8');
   execFileSync('git', ['init', '--quiet'], { cwd: target, stdio: 'ignore' });
-  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/NaveLIL/bublik-ts.git'], {
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/NaveLIL/bublik-ts-release.git'], {
     cwd: target,
     stdio: 'ignore',
   });

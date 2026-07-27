@@ -5,7 +5,12 @@
 import { GuildMember } from 'discord.js';
 import type { VacationConfig } from '@prisma/client';
 import { MSK_OFFSET } from './constants';
-import { selectVacationSavedRoles } from './state';
+import {
+  normalizeVacationSavedRoleIds,
+  runVacationActivationRolePhases,
+  runVacationRestoreRolePhases,
+  selectVacationSavedRoles,
+} from './state';
 import { getDatabase } from '../../core/Database';
 import type { MemberRoleLock } from '../../core/MemberRoleLock';
 import { fetchSafeAutomaticRole, UnsafeAutomaticRoleError } from '../../core/RolePolicy';
@@ -187,25 +192,29 @@ export async function applyVacationRoles(
   vacationRoleId: string | null,
   lock?: MemberRoleLock,
 ): Promise<void> {
-  const operations: Array<() => Promise<unknown>> = [];
-  for (const roleId of savedRoleIds) {
+  const effectiveSavedRoleIds = normalizeVacationSavedRoleIds(savedRoleIds, vacationRoleId);
+  const removals: Array<() => Promise<unknown>> = [];
+  for (const roleId of effectiveSavedRoleIds) {
     if (member.roles.cache.has(roleId)) {
-      operations.push(async () => {
+      removals.push(async () => {
         await lock?.assertOwned();
         await member.roles.remove(roleId, 'Уход в отпуск');
       });
     }
   }
 
-  if (vacationRoleId && !member.roles.cache.has(vacationRoleId)) {
-    operations.push(async () => {
-      const vacationRole = await fetchSafeAutomaticRole(member.guild, vacationRoleId);
-      await lock?.assertOwned();
-      await member.roles.add(vacationRole, 'Уход в отпуск');
-    });
-  }
-
-  await runRoleMutations(operations, `Failed to apply vacation roles for ${member.id}`);
+  await runVacationActivationRolePhases(
+    // Mutual exclusion is fail-closed: never add the vacation marker while
+    // any suppressed role may still be present. Partial removals are retry-safe.
+    () => runRoleMutations(removals, `Failed to suppress vacation roles for ${member.id}`),
+    async () => {
+      if (vacationRoleId && !member.roles.cache.has(vacationRoleId)) {
+        const vacationRole = await fetchSafeAutomaticRole(member.guild, vacationRoleId);
+        await lock?.assertOwned();
+        await member.roles.add(vacationRole, 'Уход в отпуск');
+      }
+    },
+  );
 }
 
 /**
@@ -216,12 +225,18 @@ export async function restoreRoles(
   savedRoleIds: readonly string[],
   vacationRoleId: string | null,
   lock?: MemberRoleLock,
+  exclusivePingRoleId: string | null = null,
 ): Promise<void> {
-  const operations: Array<() => Promise<unknown>> = [];
-  for (const roleId of savedRoleIds) {
+  const effectiveSavedRoleIds = normalizeVacationSavedRoleIds(savedRoleIds, vacationRoleId);
+  if (exclusivePingRoleId && exclusivePingRoleId === vacationRoleId) {
+    throw new Error('Vacation restore refused a PB ping-role collision');
+  }
+  const savedRoleSet = new Set(effectiveSavedRoleIds);
+  const grants: Array<() => Promise<unknown>> = [];
+  for (const roleId of effectiveSavedRoleIds) {
     // Удалённую роль восстановить невозможно и повторять такой запрос бессмысленно.
     if (!member.roles.cache.has(roleId)) {
-      operations.push(async () => {
+      grants.push(async () => {
         try {
           const role = await fetchSafeAutomaticRole(member.guild, roleId);
           await lock?.assertOwned();
@@ -238,13 +253,29 @@ export async function restoreRoles(
       });
     }
   }
-
-  if (vacationRoleId && member.roles.cache.has(vacationRoleId)) {
-    operations.push(async () => {
-      await lock?.assertOwned();
-      await member.roles.remove(vacationRoleId, 'Возврат из отпуска');
-    });
-  }
-
-  await runRoleMutations(operations, `Failed to restore vacation roles for ${member.id}`);
+  await runVacationRestoreRolePhases(
+    // A role manually granted after the immutable snapshot is not restoration
+    // provenance. Remove it while the vacation marker still proves exclusion.
+    async () => {
+      if (
+        exclusivePingRoleId &&
+        !savedRoleSet.has(exclusivePingRoleId) &&
+        member.roles.cache.has(exclusivePingRoleId)
+      ) {
+        await lock?.assertOwned();
+        await member.roles.remove(exclusivePingRoleId, 'Возврат из отпуска: роль не входила в снимок');
+        await lock?.assertOwned();
+      }
+    },
+    // Remove the marker first. If Discord cannot prove that removal succeeded,
+    // no saved/ping role is granted and RESTORING remains safely retryable.
+    async () => {
+      if (vacationRoleId && member.roles.cache.has(vacationRoleId)) {
+        await lock?.assertOwned();
+        await member.roles.remove(vacationRoleId, 'Возврат из отпуска');
+        await lock?.assertOwned();
+      }
+    },
+    () => runRoleMutations(grants, `Failed to restore vacation roles for ${member.id}`),
+  );
 }

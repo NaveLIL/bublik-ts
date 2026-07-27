@@ -31,6 +31,7 @@ import { i18n } from '../../../core/I18n';
 import { getGuildLocale } from '../../../core/GuildConfig';
 import { getRedis } from '../../../core/Redis';
 import { getDatabase } from '../../../core/Database';
+import { getCompleteGuildMembers } from '../../../core/GuildMemberSnapshot';
 import {
   evaluateRolePolicy,
   fetchRolePolicySubject,
@@ -66,6 +67,11 @@ import {
 } from '../embeds';
 import { VacationStatus, VacationType } from '../constants';
 import { fetchGuildMemberIfPresent } from '../../../utils/helpers';
+import {
+  vacationRoleChangeRequested,
+  vacationRoleConfigurationIsDistinct,
+} from '../state';
+import { withVacationRoleConfigLock } from '../roleConfigLock';
 
 const log = logger.child('Vacation:Command');
 
@@ -438,17 +444,137 @@ async function handleSetup(
   if (maxDays !== null) data.maxDurationDays = maxDays;
   if (quickHours !== null) data.quickDurationH = quickHours;
 
-  const config = await upsertConfig(guildId, data);
+  type SetupMutationResult =
+    | { ok: true; config: Awaited<ReturnType<typeof upsertConfig>>; isNew: boolean }
+    | { ok: false; reason: 'collision' | 'live' | 'holders'; count?: number };
+
+  let mutation: SetupMutationResult;
+  if (role) {
+    // A complete member snapshot can require a gateway chunk request. Acknowledge
+    // the interaction before entering the serialized scan/update section.
+    await interaction.deferReply({ ephemeral: true });
+    mutation = await withVacationRoleConfigLock<SetupMutationResult>(
+      guildId,
+      async (configLock) => {
+        const freshExisting = await getDatabase().vacationConfig.findUnique({
+          where: { guildId },
+        });
+        const regbattle = await getDatabase().regbattleConfig.findUnique({
+          where: { guildId },
+          select: {
+            pingRoleId: true,
+            inSquadRoleId: true,
+            playedTodayRoleId: true,
+            reprimandTypeRoleIds: true,
+          },
+        });
+        if (
+          !vacationRoleConfigurationIsDistinct(role.id, [
+            regbattle?.pingRoleId ?? null,
+            regbattle?.inSquadRoleId ?? null,
+            regbattle?.playedTodayRoleId ?? null,
+          ], freshExisting?.removeRoleIds ?? []) ||
+          regbattle?.reprimandTypeRoleIds.includes(role.id)
+        ) {
+          return { ok: false, reason: 'collision' };
+        }
+
+        const previousVacationRoleId = freshExisting?.vacationRoleId ?? null;
+        if (vacationRoleChangeRequested(previousVacationRoleId, role.id)) {
+          if (!freshExisting || !previousVacationRoleId) {
+            throw new Error('Vacation role change lost its configuration snapshot');
+          }
+          const liveCount = await getDatabase().vacationRequest.count({
+            where: {
+              configId: freshExisting.id,
+              status: { in: [
+                VacationStatus.Activating,
+                VacationStatus.Active,
+                VacationStatus.Restoring,
+              ] },
+            },
+          });
+          if (liveCount > 0) return { ok: false, reason: 'live', count: liveCount };
+
+          const guild = interaction.guild;
+          if (!guild) throw new Error('Vacation setup requires a guild');
+          const members = await getCompleteGuildMembers(guild);
+          const oldRoleHolderCount = members.filter((member) =>
+            member.roles.cache.has(previousVacationRoleId)).size;
+          if (oldRoleHolderCount > 0) {
+            return { ok: false, reason: 'holders', count: oldRoleHolderCount };
+          }
+        }
+
+        await configLock.assertOwned();
+        return {
+          ok: true,
+          config: await upsertConfig(guildId, data),
+          isNew: !freshExisting,
+        };
+      },
+    );
+  } else {
+    const finalVacationRoleId = existing?.vacationRoleId ?? null;
+    const regbattle = finalVacationRoleId
+      ? await getDatabase().regbattleConfig.findUnique({
+        where: { guildId },
+        select: {
+          pingRoleId: true,
+          inSquadRoleId: true,
+          playedTodayRoleId: true,
+          reprimandTypeRoleIds: true,
+        },
+      })
+      : null;
+    if (
+      finalVacationRoleId && (
+        !vacationRoleConfigurationIsDistinct(finalVacationRoleId, [
+          regbattle?.pingRoleId ?? null,
+          regbattle?.inSquadRoleId ?? null,
+          regbattle?.playedTodayRoleId ?? null,
+        ], existing?.removeRoleIds ?? []) ||
+        regbattle?.reprimandTypeRoleIds.includes(finalVacationRoleId)
+      )
+    ) {
+      mutation = { ok: false, reason: 'collision' };
+    } else {
+      mutation = {
+        ok: true,
+        config: await upsertConfig(guildId, data),
+        isNew: !existing,
+      };
+    }
+  }
+
+  if (!mutation.ok) {
+    let embed;
+    if (mutation.reason === 'live') {
+      embed = errorEmbed(i18n.t('vacation.error_role_change_live', locale, {
+        count: mutation.count ?? 0,
+      }));
+    } else if (mutation.reason === 'holders') {
+      embed = errorEmbed(i18n.t('vacation.error_role_change_holders', locale, {
+        count: mutation.count ?? 0,
+      }));
+    } else {
+      embed = errorEmbed(i18n.t('vacation.error_role_conflicts_pb_or_remove', locale));
+    }
+    if (interaction.deferred) await interaction.editReply({ embeds: [embed] });
+    else await interaction.reply({ embeds: [embed], ephemeral: true });
+    return;
+  }
+
+  const { config, isNew } = mutation;
 
   // Формируем ответ с пометками что изменилось
   const changed = (key: string) => data[key] !== undefined ? ' ✏️' : '';
-  const isNew = !existing;
 
   const statusText = isNew
     ? i18n.t('vacation.success_setup_status_new', locale)
     : i18n.t('vacation.success_setup_status_updated', locale);
 
-  await interaction.reply({
+  const response = {
     embeds: [successEmbed(
       `🏖️ **${i18n.t('vacation.cmd.description', locale)} ${statusText}!**\n\n` +
       `> 📋 **${i18n.t('vacation.config_review_channel', locale, { value: `<#${config.reviewChannelId}>` })}**${changed('reviewChannelId')}\n` +
@@ -458,8 +584,9 @@ async function handleSetup(
       `> ${i18n.t('vacation.config_quick_duration', locale, { hours: String(config.quickDurationH) })}${changed('quickDurationH')}\n` +
       (isNew ? `\n${i18n.t('vacation.success_setup_next_steps', locale)}` : ''),
     )],
-    ephemeral: true,
-  });
+  };
+  if (interaction.deferred) await interaction.editReply(response);
+  else await interaction.reply({ ...response, ephemeral: true });
 
   log.info(`Vacation setup: ${interaction.guild?.name}`);
 }
@@ -568,6 +695,14 @@ async function handleAddRole(
     return;
   }
 
+  if (type === 'remove' && role.id === config.vacationRoleId) {
+    await interaction.reply({
+      embeds: [errorEmbed(i18n.t('vacation.error_role_conflicts_pb_or_remove', locale))],
+      ephemeral: true,
+    });
+    return;
+  }
+
   const fieldMap: Record<string, string> = {
     remove: 'removeRoleIds',
     reviewer: 'reviewerRoleIds',
@@ -581,8 +716,40 @@ async function handleAddRole(
     return;
   }
 
-  const updated = [...current, role.id];
-  await upsertConfig(guildId, { [field]: updated });
+  let updated: string[];
+  if (type === 'remove') {
+    await interaction.deferReply({ ephemeral: true });
+    const mutation = await withVacationRoleConfigLock(guildId, async (configLock) => {
+      const freshConfig = await getDatabase().vacationConfig.findUnique({
+        where: { guildId },
+      });
+      if (!freshConfig) throw new Error('Vacation configuration disappeared');
+      if (freshConfig.vacationRoleId === role.id) return null;
+      if (freshConfig.removeRoleIds.includes(role.id)) {
+        return { alreadyConfigured: true } as const;
+      }
+      const next = [...freshConfig.removeRoleIds, role.id];
+      await configLock.assertOwned();
+      await upsertConfig(guildId, { removeRoleIds: next });
+      return { updated: next } as const;
+    });
+    if (!mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('vacation.error_role_conflicts_pb_or_remove', locale))],
+      });
+      return;
+    }
+    if ('alreadyConfigured' in mutation) {
+      await interaction.editReply({
+        embeds: [errorEmbed(i18n.t('vacation.error_role_already_in_list', locale, { roleId: role.id }))],
+      });
+      return;
+    }
+    updated = mutation.updated;
+  } else {
+    updated = [...current, role.id];
+    await upsertConfig(guildId, { [field]: updated });
+  }
 
   const typeLabels: Record<string, string> = {
     remove: i18n.t('vacation.role_type_remove', locale),
@@ -591,12 +758,13 @@ async function handleAddRole(
   };
 
   const list = updated.map((id) => `<@&${id}>`).join(', ');
-  await interaction.reply({
+  const response = {
     embeds: [successEmbed(
       i18n.t('vacation.success_role_added', locale, { roleId: role.id, typeLabel: typeLabels[type], list }),
     )],
-    ephemeral: true,
-  });
+  };
+  if (interaction.deferred) await interaction.editReply(response);
+  else await interaction.reply({ ...response, ephemeral: true });
 }
 
 // ═══════════════════════════════════════════════

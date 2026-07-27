@@ -55,6 +55,32 @@ export function getPrismaErrorCode(error: unknown): string | null {
   return typeof code === 'string' ? code : null;
 }
 
+export interface PbCoreRoleIds {
+  pingRoleId?: string | null;
+  inSquadRoleId?: string | null;
+  playedTodayRoleId?: string | null;
+}
+
+/** A disciplinary role must never alias a PB capability or vacation marker. */
+export function reprimandTypeRoleConflictsWithProtectedRole(
+  roleId: string,
+  coreRoles: PbCoreRoleIds,
+  vacationRoleId: string | null,
+): boolean {
+  return roleId === vacationRoleId || [
+    coreRoles.pingRoleId,
+    coreRoles.inSquadRoleId,
+    coreRoles.playedTodayRoleId,
+  ].some((protectedRoleId) => Boolean(protectedRoleId) && roleId === protectedRoleId);
+}
+
+/** Daily provenance is retained untouched until vacation role suppression ends. */
+export function playedResetDisposition(
+  roleMutationSuppressed: boolean,
+): 'apply' | 'defer' {
+  return roleMutationSuppressed ? 'defer' : 'apply';
+}
+
 export function isCommanderAuthorized(
   configuredRoleIds: unknown,
   memberRoleIds: ReadonlySet<string>,

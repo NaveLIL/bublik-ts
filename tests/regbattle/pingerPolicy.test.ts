@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPingerObservationSignature,
+  canSendPingerFullSuggestion,
   completePingerRevision,
   hasPendingPingerRevision,
   isPingerActionDue,
@@ -10,6 +11,8 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerPopulationPhase,
+  selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
   summarizePingerOccupancy,
@@ -98,6 +101,30 @@ test('notify-off occupancy cannot manufacture recruiting progress', () => {
   assert.equal(summarizePingerOccupancy(after).occupiedSlots, 2);
 });
 
+test('FULL and IDLE decisions consider only notification-enabled squads', () => {
+  const squads = [
+    { squadId: 'full-active', count: 5, size: 5 },
+    { squadId: 'unfilled-silent', count: 1, size: 5 },
+  ];
+  const active = selectNotifyEnabledSquads(squads, new Set(['unfilled-silent']));
+
+  assert.equal(selectPingerPopulationPhase(active), 'full');
+  assert.equal(
+    selectPingerPopulationPhase(selectNotifyEnabledSquads(squads, new Set(squads.map((s) => s.squadId)))),
+    'idle',
+  );
+  assert.equal(selectPingerPopulationPhase(squads), 'recruiting');
+});
+
+test('FULL reserve send gate rejects a stale revision or late free slot', () => {
+  const full = [{ count: 5, size: 5 }];
+
+  assert.equal(canSendPingerFullSuggestion(7, 7, full), true);
+  assert.equal(canSendPingerFullSuggestion(7, 8, full), false);
+  assert.equal(canSendPingerFullSuggestion(7, 7, [{ count: 4, size: 5 }]), false);
+  assert.equal(canSendPingerFullSuggestion(7, 7, []), false);
+});
+
 test('FULL status refresh is due only at or after the interval boundary', () => {
   assert.equal(isPingerActionDue(999, 0, 1_000), false);
   assert.equal(isPingerActionDue(1_000, 0, 1_000), true);
@@ -109,6 +136,14 @@ test('released and superseded claims never manufacture a local cooldown', () => 
   assert.equal(shouldAdvancePingerLocalCooldown('ownership-lost'), false);
   assert.equal(shouldAdvancePingerLocalCooldown('retained-without-send'), true);
   assert.equal(shouldAdvancePingerLocalCooldown('sent-or-ambiguous'), true);
+});
+
+test('only an explicit safe abort releases a pinger claim early', () => {
+  assert.equal(selectPingerClaimSettlement(false, false, true), 'release');
+  assert.equal(selectPingerClaimSettlement(false, true, true), 'ownership-lost');
+  assert.equal(selectPingerClaimSettlement(false, false, false), 'finalize');
+  assert.equal(selectPingerClaimSettlement(true, false, true), 'finalize');
+  assert.equal(selectPingerClaimSettlement(true, true, true), 'finalize');
 });
 
 test('a recalculation requested during async work remains pending', () => {

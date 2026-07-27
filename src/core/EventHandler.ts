@@ -8,6 +8,10 @@ import {
   isGuildAllowed,
   WhitelistState,
 } from './Whitelist';
+import {
+  invalidateAllCompleteGuildMembers,
+  invalidateCompleteGuildMembers,
+} from './GuildMemberSnapshot';
 
 const log = logger.child('Events');
 
@@ -53,6 +57,7 @@ export async function leaveUnauthorizedGuild(guild: Guild): Promise<void> {
 export function registerCoreEvents(client: BublikClient): void {
   // ── Ready ─────────────────────────────────
   client.once(Events.ClientReady, async (readyClient: Client<true>) => {
+    invalidateAllCompleteGuildMembers();
     log.info(`Бот ${readyClient.user.tag} запущен! Гильдий: ${readyClient.guilds.cache.size}`);
 
     // Проверяем все текущие гильдии — покидаем неразрешённые
@@ -93,6 +98,7 @@ export function registerCoreEvents(client: BublikClient): void {
 
   // ── Новая гильдия — проверяем whitelist ────
   client.on(Events.GuildCreate, async (guild: Guild) => {
+    invalidateCompleteGuildMembers(guild.id);
     log.info(`Добавлен в гильдию: ${guild.name} (${guild.id})`);
 
     try {
@@ -112,10 +118,23 @@ export function registerCoreEvents(client: BublikClient): void {
 
   // ── Удаление из гильдии ────────────────────
   client.on(Events.GuildDelete, (guild: Guild) => {
+    invalidateCompleteGuildMembers(guild.id);
     log.info(`Удалён из гильдии: ${guild.name} (${guild.id})`);
   });
 
   // ── Ошибки и предупреждения ────────────────
+  client.on(Events.GuildUnavailable, (guild: Guild) => {
+    invalidateCompleteGuildMembers(guild.id);
+  });
+
+  client.on(Events.GuildAvailable, (guild: Guild) => {
+    invalidateCompleteGuildMembers(guild.id);
+  });
+
+  client.on(Events.Invalidated, () => {
+    invalidateAllCompleteGuildMembers();
+  });
+
   client.on(Events.Error, (error: Error) => {
     log.error('Discord.js ошибка', error);
   });
@@ -139,10 +158,12 @@ export function registerCoreEvents(client: BublikClient): void {
   });
 
   client.on(Events.ShardDisconnect, (_event: CloseEvent, id: number) => {
+    invalidateAllCompleteGuildMembers();
     log.warn(`Shard ${id} отключён`);
   });
 
   client.on(Events.ShardReconnecting, (id: number) => {
+    invalidateAllCompleteGuildMembers();
     log.info(`Shard ${id} переподключается…`);
   });
 

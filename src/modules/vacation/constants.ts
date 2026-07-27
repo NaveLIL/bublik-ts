@@ -45,6 +45,7 @@ export const REASONS: VacationReason[] = [
 export const AUTO_DENY_MIN_MS      = 1 * 60 * 60 * 1000;    // 1 час — минимум для запроса к БД (реальный порог — autoDenyHours в конфиге)
 export const REMINDER_BEFORE_MS   = 24 * 60 * 60 * 1000;   // 24 часа — напоминание
 export const SCHEDULER_INTERVAL_MS = 60 * 1000;             // 1 минута — интервал проверки
+export const VACATION_ROLE_INTEGRITY_INTERVAL_MS = 5 * 60 * 1000;
 export const MSK_OFFSET           = 3;                      // UTC+3 Москва
 export const MIN_DURATION_MINUTES = 60;                     // минимум 1 час
 

@@ -9,21 +9,42 @@ import {
   buildMinecraftShopEmbed,
   buildMinecraftShopComponents,
   buildMinecraftPurchaseReceiptEmbed,
+  buildMinecraftPurchaseFailureText,
 } from './embeds';
 import { purchaseMinecraftShopItem } from './services/economy-bridge';
+import type { Client } from 'discord.js';
+import { isMinecraftGuildEnabled, isMinecraftModuleConfigured } from './constants';
 
 let shopInteractionListener: ((...args: unknown[]) => void) | null = null;
+let shopInteractionClient: Client | null = null;
 
 const minecraftModule: BublikModule = {
   name: 'minecraft',
   descriptionKey: 'modules.minecraft.description',
   version: '1.0.0',
-  author: 'NaveL',
+  author: 'NaveLIL',
 
   commands: [mcCommand],
 
   async onLoad(client) {
-    client.logger.child('Module:minecraft').info('Модуль Minecraft (EREZCRAFT) загружен');
+    if (shopInteractionClient && shopInteractionListener) {
+      shopInteractionClient.off(
+        Events.InteractionCreate,
+        shopInteractionListener as Parameters<typeof shopInteractionClient.off>[1]
+      );
+    }
+    shopInteractionClient = null;
+    shopInteractionListener = null;
+
+    const moduleLog = client.logger.child('Module:minecraft');
+    if (!isMinecraftModuleConfigured()) {
+      stopMinecraftStatusTracker();
+      stopChatBridge();
+      moduleLog.warn('Модуль Minecraft отключён: требуется MINECRAFT_GUILD_ID и полная конфигурация RCON');
+      return;
+    }
+
+    moduleLog.info('Модуль Minecraft (EREZCRAFT) загружен');
     await startMinecraftStatusTracker(client);
     await startChatBridge(client);
 
@@ -33,6 +54,7 @@ const minecraftModule: BublikModule = {
 
       const { customId, guildId, member, user, values } = interaction;
       if (!guildId || !member) return;
+      if (!isMinecraftGuildEnabled(guildId)) return;
 
       if (customId === 'mc_shop_category') {
         const category = values[0];
@@ -61,15 +83,9 @@ const minecraftModule: BublikModule = {
         const result = await purchaseMinecraftShopItem(guildId, member, itemId);
 
         if (!result.success) {
-          let msg = '❌ Ошибка при покупке предмета.';
-          if (result.reason === 'NOT_LINKED') {
-            msg = '⚠️ Ваш Discord не привязан к Minecraft! Сначала привяжите аккаунт командой `/mc link username:<ник>`.';
-          } else if (result.reason === 'ITEM_NOT_FOUND') {
-            msg = '❌ Товар не найден или временно недоступен.';
-          } else if (result.reason === 'INSUFFICIENT_FUNDS') {
-            msg = `❌ Недостаточно Шекелей! Стоимость товара: **${result.item?.priceShekels.toLocaleString()}** ₪, ваш баланс: **${(result.currentWallet ?? 0).toLocaleString()}** ₪.`;
-          }
-          await interaction.editReply({ content: msg }).catch(() => {});
+          await interaction
+            .editReply({ content: buildMinecraftPurchaseFailureText(result) })
+            .catch(() => {});
           return;
         }
 
@@ -81,10 +97,19 @@ const minecraftModule: BublikModule = {
     };
 
     client.on(Events.InteractionCreate, shopInteractionListener as Parameters<typeof client.on>[1]);
+    shopInteractionClient = client;
   },
 
   async onUnload(client) {
     client.logger.child('Module:minecraft').info('Модуль Minecraft (EREZCRAFT) выгружен');
+    if (shopInteractionClient && shopInteractionListener) {
+      shopInteractionClient.off(
+        Events.InteractionCreate,
+        shopInteractionListener as Parameters<typeof shopInteractionClient.off>[1]
+      );
+    }
+    shopInteractionClient = null;
+    shopInteractionListener = null;
     stopMinecraftStatusTracker();
     stopChatBridge();
   },

@@ -46,12 +46,16 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
     return embed;
   }
 
-  const tps = metrics.tps ?? 20.0;
-  const mspt = metrics.mspt ?? 0;
+  const tps = metrics.tps;
+  const mspt = metrics.mspt;
   const pingMs = metrics.pingMs;
-  const isDegraded = tps < 15.0;
+  const isDegraded = tps !== undefined && tps < 15.0;
 
-  const statusBadge = isDegraded ? '🟡 Высокая нагрузка' : '🟢 В сети (Отлично)';
+  const statusBadge = isDegraded
+    ? '🟡 Высокая нагрузка'
+    : tps === undefined
+      ? '🟢 В сети'
+      : '🟢 В сети (стабильно)';
   const color = isDegraded ? 0xfee75c : 0x57f287;
 
   // Ping quality indicator
@@ -63,7 +67,12 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
   }
 
   // TPS quality bar
-  const tpsBar = tps >= 19.5 ? '█████' : tps >= 17 ? '████░' : tps >= 14 ? '███░░' : tps >= 10 ? '██░░░' : '█░░░░';
+  const tpsText = tps === undefined
+    ? '`недоступно`'
+    : `\`${tps.toFixed(1)}\` / 20.0 \`${
+      tps >= 19.5 ? '█████' : tps >= 17 ? '████░' : tps >= 14 ? '███░░' : tps >= 10 ? '██░░░' : '█░░░░'
+    }\``;
+  const msptText = mspt === undefined ? '`недоступно`' : `\`${mspt.toFixed(1)}\` ms`;
 
   const playerText =
     metrics.playerList.length > 0
@@ -90,12 +99,12 @@ export function buildMinecraftStatusEmbed(metrics: MinecraftServerMetrics): Bubl
       },
       {
         name: '⚡ Стабильность сервера',
-        value: `• **TPS:** \`${tps.toFixed(1)}\` / 20.0 \`${tpsBar}\`\n• **MSPT:** \`${mspt.toFixed(1)}\` ms\n• **Задержка:** ${pingEmoji} \`${pingText}\``,
+        value: `• **TPS:** ${tpsText}\n• **MSPT:** ${msptText}\n• **Задержка:** ${pingEmoji} \`${pingText}\``,
         inline: true,
       },
       {
         name: '🌐 Сеть & Сервисы',
-        value: `🟢 **Game TCP:** \`25565\`\n🟢 **Voice UDP:** \`25454\`\n🟢 **Auth:** Vouch (Argon2id)`,
+        value: `🟢 **Game TCP:** доступен\n⚪ **Voice UDP:** не проверяется ботом\n⚪ **Auth:** не проверяется ботом`,
         inline: true,
       }
     )
@@ -350,4 +359,30 @@ export function buildMinecraftPurchaseReceiptEmbed(
     )
     .setThumbnail(`https://mc-heads.net/avatar/${username}/128`)
     .setTimestamp();
+}
+
+export function buildMinecraftPurchaseFailureText(result: {
+  reason?: string;
+  item?: Pick<MinecraftShopItemData, 'priceShekels'>;
+  currentWallet?: number;
+}): string {
+  switch (result.reason) {
+    case 'NOT_LINKED':
+      return '⚠️ Ваш Discord не привязан к Minecraft! Сначала используйте `/mc link username:<ник>`.';
+    case 'ITEM_NOT_FOUND':
+      return '❌ Товар не найден или временно недоступен.';
+    case 'INSUFFICIENT_FUNDS':
+      return `❌ Недостаточно Шекелей! Стоимость: **${result.item?.priceShekels.toLocaleString() ?? '—'}** ₪, баланс: **${(result.currentWallet ?? 0).toLocaleString()}** ₪.`;
+    case 'DELIVERY_FAILED':
+      return `⚠️ Сервер Minecraft не подтвердил выдачу. Списанные средства автоматически возвращены; текущий баланс: **${(result.currentWallet ?? 0).toLocaleString()}** ₪.`;
+    case 'DELIVERY_PARTIAL':
+      return '⚠️ Набор выдан частично. Повторная покупка заблокирована от автоматического возврата; администрации отправлена запись для ручной сверки.';
+    case 'REFUND_PENDING':
+      return '🚨 Выдача не состоялась, а автоматический возврат пока не подтверждён. Не повторяйте покупку — операция сохранена для восстановления администрацией.';
+    case 'INVALID_PRICE':
+    case 'INVALID_DELIVERY':
+      return '⛔ Товар отключён системой безопасности из-за некорректной настройки.';
+    default:
+      return '❌ Внутренняя ошибка при покупке. Средства не следует списывать повторно до проверки операции.';
+  }
 }

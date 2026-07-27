@@ -3,15 +3,32 @@ import type { Client, TextChannel } from 'discord.js';
 import { logger } from '../../../core/Logger';
 import { getAllMinecraftConfigs, updateMinecraftConfig } from '../database';
 import { buildMinecraftStatusEmbed, buildMinecraftAlertEmbed, MinecraftServerMetrics } from '../embeds';
-import { STATUS_REFRESH_INTERVAL_MS, ALERT_DEGRADED_TPS_THRESHOLD, ALERT_COOLDOWN_MS } from '../constants';
+import {
+  STATUS_REFRESH_INTERVAL_MS,
+  ALERT_DEGRADED_TPS_THRESHOLD,
+  ALERT_COOLDOWN_MS,
+  isMinecraftGuildEnabled,
+  isMinecraftModuleConfigured,
+} from '../constants';
 import { executeRconCommand } from './rcon-service';
 
 const log = logger.child('Minecraft:StatusTracker');
 
 let trackerInterval: NodeJS.Timeout | null = null;
+let statusCheckInFlight = false;
 
-export async function startMinecraftStatusTracker(client: Client): Promise<void> {
+export async function startMinecraftStatusTracker(
+  client: Client,
+  environment: NodeJS.ProcessEnv = process.env
+): Promise<boolean> {
   if (trackerInterval) clearInterval(trackerInterval);
+  trackerInterval = null;
+  statusCheckInFlight = false;
+
+  if (!isMinecraftModuleConfigured(environment)) {
+    log.warn('Мониторинг Minecraft отключён: Minecraft/RCON не настроен');
+    return false;
+  }
 
   log.info('Запуск службы мониторинга Minecraft-серверов...');
   
@@ -20,14 +37,22 @@ export async function startMinecraftStatusTracker(client: Client): Promise<void>
 
   // Periodic interval
   trackerInterval = setInterval(async () => {
-    await checkAllMinecraftStatuses(client);
+    if (statusCheckInFlight) return;
+    statusCheckInFlight = true;
+    try {
+      await checkAllMinecraftStatuses(client);
+    } finally {
+      statusCheckInFlight = false;
+    }
   }, STATUS_REFRESH_INTERVAL_MS);
+  return true;
 }
 
 export function stopMinecraftStatusTracker(): void {
   if (trackerInterval) {
     clearInterval(trackerInterval);
     trackerInterval = null;
+    statusCheckInFlight = false;
     log.info('Служба мониторинга Minecraft-серверов остановлена.');
   }
 }
@@ -36,6 +61,7 @@ export async function checkAllMinecraftStatuses(client: Client): Promise<void> {
   try {
     const configs = await getAllMinecraftConfigs();
     for (const config of configs) {
+      if (!isMinecraftGuildEnabled(config.guildId)) continue;
       if (!config.statusChannelId) continue;
       await refreshGuildMinecraftStatus(client, config.guildId);
     }
@@ -54,19 +80,14 @@ export async function refreshGuildMinecraftStatus(client: Client, guildId: strin
 
   const pingResult = await pingMinecraftServer(host, port);
 
-  // Fetch real TPS/MSPT via RCON
-  let tps = pingResult.online ? 20.0 : 0;
-  let mspt = pingResult.online ? 0 : 0;
+  // Fetch real TPS via RCON. Unknown metrics remain unknown; never fabricate
+  // an "excellent" value from TCP reachability alone.
+  let tps: number | undefined;
 
   if (pingResult.online) {
     const tpsResult = await executeRconCommand('tps').catch(() => null);
     if (tpsResult?.success && tpsResult.response) {
-      // "TPS from last 1m, 5m, 15m: 20.0, 20.0, 20.0" — take 1m value
-      const match = tpsResult.response.match(/[\d.]+,\s*([\d.]+)/);
-      const raw = match ? parseFloat(match[1]) : parseFloat(tpsResult.response.match(/[\d.]+/)?.[0] ?? '20');
-      tps = Math.min(20, isNaN(raw) ? 20 : raw);
-      mspt = tps > 0 ? parseFloat((1000 / tps - 50 + Math.random() * 2).toFixed(1)) : 0;
-      if (mspt < 0) mspt = 0;
+      tps = parseTpsResponse(tpsResult.response);
     }
   }
 
@@ -79,10 +100,7 @@ export async function refreshGuildMinecraftStatus(client: Client, guildId: strin
     playersMax: pingResult.playersMax,
     playerList: pingResult.playerList,
     tps,
-    mspt,
     pingMs: pingResult.pingMs,
-    voiceChatStatus: pingResult.online,
-    frpStatus: true,
   };
 
   if (config && config.statusChannelId) {
@@ -123,7 +141,11 @@ async function updateStatusChannelEmbed(
     }
 
     // Smart Alert logic
-    const currentStatus = metrics.online ? (metrics.tps && metrics.tps < ALERT_DEGRADED_TPS_THRESHOLD ? 'degraded' : 'online') : 'offline';
+    const currentStatus = metrics.online
+      ? (metrics.tps !== undefined && metrics.tps < ALERT_DEGRADED_TPS_THRESHOLD
+        ? 'degraded'
+        : 'online')
+      : 'offline';
     const lastStatus = config.lastStatus;
     const lastAlert = config.lastAlertSentAt ? new Date(config.lastAlertSentAt).getTime() : 0;
     const now = Date.now();
@@ -145,6 +167,17 @@ async function updateStatusChannelEmbed(
   } catch (err) {
     log.error(`Ошибка при обновлении статус-сообщения в гильдии ${guildId}`, err);
   }
+}
+
+export function parseTpsResponse(response: string): number | undefined {
+  const payload = response.includes(':')
+    ? response.slice(response.indexOf(':') + 1)
+    : response;
+  const match = payload.match(/(-?\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.min(20, parsed);
 }
 
 export async function pingMinecraftServer(host: string, port: number = 25565, timeoutMs: number = 5000): Promise<{
@@ -249,7 +282,7 @@ export async function pingMinecraftServer(host: string, port: number = 25565, ti
             pingMs,
           });
         }
-      } catch (err) {
+      } catch {
         // Parsing error or partial payload
       }
     });

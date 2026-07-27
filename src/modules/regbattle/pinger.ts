@@ -19,6 +19,11 @@ import { getGuildLocale } from '../../core/GuildConfig';
 import { getRedis } from '../../core/Redis';
 import { scheduleTask, unscheduleTask } from '../../core/SchedulerManager';
 import { getAllowedGuildsList, isGuildAllowed } from '../../core/Whitelist';
+import {
+  assertCompleteGuildMemberSnapshotCurrent,
+  getCompleteGuildMemberSnapshot,
+  getCompleteGuildMembers,
+} from '../../core/GuildMemberSnapshot';
 
 import {
   PINGER_INTERVAL_MS,
@@ -46,9 +51,11 @@ import {
   loadPbPingEligibilitySnapshot,
   pbPingCandidateFromMember,
 } from './pingEligibility';
+import { buildPbPingerMessage } from './pingerMessages';
 import { isUnknownMemberError } from './safety';
 import {
   buildPingerObservationSignature,
+  canSendPingerFullSuggestion,
   completePingerRevision,
   hasPendingPingerRevision,
   isPingerActionDue,
@@ -57,6 +64,8 @@ import {
   runPingerTasksWithConcurrency,
   selectAllowedCachedGuildsToSeed,
   selectNotifyEnabledSquads,
+  selectPingerPopulationPhase,
+  selectPingerClaimSettlement,
   shouldAdvancePingerLocalCooldown,
   shouldEndEscalationAfterQueueRefresh,
   summarizePingerOccupancy,
@@ -312,9 +321,8 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
     })),
   );
 
-  const { allFull } = summarizePingerOccupancy(squadInfos);
   const { occupiedSlots: activeOccupiedSlots } = summarizePingerOccupancy(activeSquadInfos);
-  const anyUnfilled = activeSquadInfos.some((s) => s.count < s.size);
+  const populationPhase = selectPingerPopulationPhase(activeSquadInfos);
 
   const now = Date.now();
   const phaseAtCycleStart = state.phase;
@@ -344,9 +352,9 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
     hasPendingPingerRevision(observedRevision, state.processedRevision) ||
     state.lastObservationSignature !== observationSignature
   ) {
-    if (allFull) {
+    if (populationPhase === 'full') {
       state.phase = PingPhase.Full;
-    } else if (anyUnfilled) {
+    } else if (populationPhase === 'recruiting') {
       // Проверить, нужна ли эскалация
       const escalateAfter = config.pingEscalateAfter ?? 6;
       const cooledDown = isPbIndividualEscalationReady(now, state.lastEscalationEndedAt) &&
@@ -379,6 +387,7 @@ async function processGuild(guildId: string, state: GuildPingerState): Promise<v
         INDIVIDUAL_ESCALATION_COOLDOWN_MS,
       ),
     ]);
+    await refreshPingerModePanel(guild);
   }
 
   // Обработка по фазе
@@ -431,14 +440,15 @@ async function handleRecruiting(
     ROLE_PING_INTERVAL_MS,
   );
   if (!claim) return;
-  let finalFenceAbort = false;
   let claimOwnershipLost = false;
   let sendAttempted = false;
+  let retrySafeAbort = false;
 
   try {
     // One complete population is shared by the status panel and role-mention
     // policy; Discord's full member request is not issued twice back-to-back.
-    const members = await guild.members.fetch();
+    const memberSnapshot = await getCompleteGuildMemberSnapshot(guild);
+    const members = memberSnapshot.members;
     await refreshStatusPanel(guild, pingerClient!, true, members);
 
     const locale = await getGuildLocale(guild.id);
@@ -456,7 +466,7 @@ async function handleRecruiting(
       state.requestedRevision !== observedRevision ||
       !preliminary.active.some((squad) => squad.count < squad.size)
     ) {
-      finalFenceAbort = true;
+      retrySafeAbort = true;
       return;
     }
 
@@ -467,10 +477,8 @@ async function handleRecruiting(
       return;
     }
 
-    // Discord role mentions are all-or-nothing. Rebuild the complete role
-    // population after claim confirmation, then make the final decision with
-    // no await between that synchronous fence and channel.send invocation.
-    await guild.members.fetch();
+    // Discord role mentions are all-or-nothing. Rebuild every mutable policy
+    // input after claim confirmation.
     const pingRole = pingRoleId
       ? await guild.roles.fetch(pingRoleId, { force: true })
       : null;
@@ -479,15 +487,21 @@ async function handleRecruiting(
       ? await loadPbPingEligibilitySnapshot(guild.id)
       : null;
 
-    // Eligibility is the last await. Refresh gateway occupancy synchronously
-    // afterwards so a late join/full squad aborts before the send call.
+    // Eligibility is the final await. Reassert the exact complete-cache gateway
+    // generation captured above, then keep the occupancy/role/send fence fully
+    // synchronous. A disconnect fails closed instead of silently crossing into
+    // a new generation with stale policy reads.
+    assertCompleteGuildMemberSnapshotCurrent(guild, memberSnapshot.token);
+
+    // Refresh gateway occupancy synchronously so a late join/full squad aborts
+    // before the send call.
     const finalActive = fresh.active.map((squad) => ({
       ...squad,
       count: getSquadMemberCount(guild, squad.voiceChannelId, squad.airChannelId),
     }));
     const freshUnfilled = finalActive.filter((squad) => squad.count < squad.size);
     if (state.requestedRevision !== observedRevision || freshUnfilled.length === 0) {
-      finalFenceAbort = true;
+      retrySafeAbort = true;
       return;
     }
 
@@ -527,13 +541,10 @@ async function handleRecruiting(
     }
 
     sendAttempted = true;
-    const sendPromise = channel.send({
-      ...(mention ?? {}),
-      embeds: [buildRecruitPingEmbed(finalActive, locale)],
-      allowedMentions: mention?.allowedMentions ?? {
-        parse: [], roles: [], users: [], repliedUser: false,
-      },
-    });
+    const sendPromise = channel.send(buildPbPingerMessage(
+      buildRecruitPingEmbed(finalActive, locale),
+      mention,
+    ));
     const sent = await sendPromise;
 
     // Автоудаление пинг-сообщения
@@ -577,29 +588,28 @@ async function handleRecruiting(
       state.individualQueue = [];
       state.individualIndex = 0;
       log.info(`Пингер гильдии ${guild.id}: эскалация к именным пингам`);
+      await refreshPingerModePanel(guild);
     }
   } catch (err) {
     log.error('Ошибка пинга роли', { error: String(err) });
   } finally {
     let localOutcome: Parameters<typeof shouldAdvancePingerLocalCooldown>[0];
     let settled = false;
-    if (sendAttempted) {
-      localOutcome = 'sent-or-ambiguous';
+    const settlement = selectPingerClaimSettlement(
+      sendAttempted,
+      claimOwnershipLost,
+      retrySafeAbort,
+    );
+    if (settlement === 'finalize') {
+      localOutcome = sendAttempted ? 'sent-or-ambiguous' : 'retained-without-send';
       settled = await finalizePingerCooldown(redis, claim).catch(() => false);
-    } else if (claimOwnershipLost) {
+    } else if (settlement === 'ownership-lost') {
       localOutcome = 'ownership-lost';
       settled = true;
-    } else if (finalFenceAbort) {
+    } else {
       try {
         settled = await releasePingerCooldown(redis, claim);
         localOutcome = settled ? 'released' : 'ownership-lost';
-      } catch {
-        localOutcome = 'retained-without-send';
-      }
-    } else {
-      try {
-        settled = await finalizePingerCooldown(redis, claim);
-        localOutcome = settled ? 'retained-without-send' : 'ownership-lost';
       } catch {
         localOutcome = 'retained-without-send';
       }
@@ -616,6 +626,18 @@ async function handleRecruiting(
 // ═══════════════════════════════════════════════
 //  Фаза: ESCALATED — именные пинги каждые 30 сек
 // ═══════════════════════════════════════════════
+
+async function refreshPingerModePanel(guild: Guild): Promise<void> {
+  if (!pingerClient) return;
+  try {
+    await refreshStatusPanel(guild, pingerClient, true);
+  } catch (error) {
+    // Panel observability must not interrupt the notification state machine.
+    log.warn(`Pinger ${guild.id}: notification mode panel refresh deferred`, {
+      error: String(error),
+    });
+  }
+}
 
 async function finishIndividualEscalation(
   guildId: string,
@@ -650,6 +672,7 @@ async function handleEscalated(
   // Очередь исчерпана → один круг завершён, кулдаун 30 мин
   if (state.individualQueue.length > 0 && state.individualIndex >= state.individualQueue.length) {
     await finishIndividualEscalation(guild.id, state);
+    await refreshPingerModePanel(guild);
     log.info(`Пингер гильдии ${guild.id}: именные пинги завершены (1 круг), кулдаун 30 мин`);
     return;
   }
@@ -664,9 +687,11 @@ async function handleEscalated(
     if (shouldEndEscalationAfterQueueRefresh(refreshOutcome)) {
       // Нет доступных бойцов → вернуться к ролевым пингам
       await finishIndividualEscalation(guild.id, state);
+      await refreshPingerModePanel(guild);
       log.info(`Пингер гильдии ${guild.id}: нет бойцов для именных пингов, кулдаун 30 мин`);
       return;
     }
+    await refreshPingerModePanel(guild);
   }
 
   const userId = state.individualQueue[state.individualIndex];
@@ -941,7 +966,7 @@ async function refreshIndividualQueue(
   }
 
   try {
-    await guild.members.fetch();
+    await getCompleteGuildMembers(guild);
     const pbChannelIds = new Set(await getAllPbChannelIds(guild.id));
     if (config.reserveChannelId) pbChannelIds.add(config.reserveChannelId);
     const eligibility = await loadPbPingEligibilitySnapshot(
@@ -998,65 +1023,131 @@ async function handleFull(
     FULL_SUGGEST_INTERVAL_MS,
   );
   if (!claim) return;
-  let finalFenceAbort = false;
   let claimOwnershipLost = false;
   let sendAttempted = false;
+  let retrySafeAbort = false;
 
   // A forced panel refresh belongs to the due FULL action; it must not run on
   // every 10-second pinger tick.
   try {
-    await refreshStatusPanel(guild, pingerClient!, true);
+    // Share one complete population with the status panel and the role-mention
+    // safety policy. This avoids duplicate Discord member requests.
+    const memberSnapshot = await getCompleteGuildMemberSnapshot(guild);
+    const members = memberSnapshot.members;
+    await refreshStatusPanel(guild, pingerClient!, true, members);
     const locale = await getGuildLocale(guild.id);
     const channel = await guild.client.channels.fetch(config.announceChannelId) as TextChannel;
     if (!channel) return;
+
+    const pingRoleId = typeof config.pingRoleId === 'string' ? config.pingRoleId : null;
+    let mention: ReturnType<typeof buildPbMassRoleMentionPlan> = null;
+
+    const preliminary = await observePingerSquads(guild, config);
+    if (!canSendPingerFullSuggestion(
+      observedRevision,
+      state.requestedRevision,
+      preliminary.active,
+    )) {
+      retrySafeAbort = true;
+      return;
+    }
 
     if (!(await confirmPingerCooldown(redis, claim))) {
       claimOwnershipLost = true;
       return;
     }
 
+    const pingRole = pingRoleId
+      ? await guild.roles.fetch(pingRoleId, { force: true })
+      : null;
     const fresh = await observePingerSquads(guild, config);
-    const finalOccupancy = fresh.all.map((squad) => ({
+    const eligibility = pingRoleId && pingRole
+      ? await loadPbPingEligibilitySnapshot(guild.id)
+      : null;
+
+    // Eligibility is the final await. From this point through channel.send(),
+    // keep the gateway generation, occupancy and role population fence fully
+    // synchronous so a late change fails closed.
+    assertCompleteGuildMemberSnapshotCurrent(guild, memberSnapshot.token);
+
+    const finalOccupancy = fresh.active.map((squad) => ({
       ...squad,
       count: getSquadMemberCount(guild, squad.voiceChannelId, squad.airChannelId),
     }));
-    if (
-      state.requestedRevision !== observedRevision ||
-      !summarizePingerOccupancy(finalOccupancy).allFull
-    ) {
-      finalFenceAbort = true;
+    if (!canSendPingerFullSuggestion(
+      observedRevision,
+      state.requestedRevision,
+      finalOccupancy,
+    )) {
+      retrySafeAbort = true;
       return;
     }
 
+    if (pingRoleId && pingRole && eligibility) {
+      const pbChannelIds = new Set<string>();
+      for (const squad of fresh.all) {
+        pbChannelIds.add(squad.voiceChannelId);
+        if (squad.airChannelId) pbChannelIds.add(squad.airChannelId);
+      }
+      pbChannelIds.add(config.reserveChannelId);
+      const pingRoleMembers = pingRole.members.map(pbPingCandidateFromMember);
+      const unavailablePingRoleState = new Map<string, boolean>();
+      for (const userId of eligibility.excludedUserIds) {
+        unavailablePingRoleState.set(
+          userId,
+          guild.members.cache.get(userId)?.roles.cache.has(pingRoleId) === true,
+        );
+      }
+      mention = buildPbMassRoleMentionPlan(
+        {
+          pingRoleId,
+          playedTodayRoleId: config.playedTodayRoleId ?? null,
+          pbChannelIds,
+        },
+        eligibility,
+        unavailablePingRoleState,
+        pingRoleMembers,
+        pingRole.mentionable || Boolean(
+          guild.members.me &&
+          channel.permissionsFor(guild.members.me)?.has(PermissionFlagsBits.MentionEveryone),
+        ),
+      );
+    }
+
     sendAttempted = true;
-    const sendPromise = channel.send({
-      embeds: [buildFullSuggestEmbed(config.reserveChannelId, locale)],
-    });
+    const sendPromise = channel.send(buildPbPingerMessage(
+      buildFullSuggestEmbed(config.reserveChannelId, locale),
+      mention,
+    ));
     const sent = await sendPromise;
 
     scheduleAutoDelete(sent);
+
+    if (!mention) {
+      log.warn(
+        `Pinger ${guild.id}: FULL reserve suggestion sent without unsafe/unavailable role mention`,
+      );
+    }
   } catch (err) {
     log.error('Ошибка предложения запасных', { error: String(err) });
   } finally {
     let localOutcome: Parameters<typeof shouldAdvancePingerLocalCooldown>[0];
     let settled = false;
-    if (sendAttempted) {
-      localOutcome = 'sent-or-ambiguous';
+    const settlement = selectPingerClaimSettlement(
+      sendAttempted,
+      claimOwnershipLost,
+      retrySafeAbort,
+    );
+    if (settlement === 'finalize') {
+      localOutcome = sendAttempted ? 'sent-or-ambiguous' : 'retained-without-send';
       settled = await finalizePingerCooldown(redis, claim).catch(() => false);
-    } else if (claimOwnershipLost) {
+    } else if (settlement === 'ownership-lost') {
       localOutcome = 'ownership-lost';
       settled = true;
-    } else if (finalFenceAbort) {
+    } else {
       try {
         settled = await releasePingerCooldown(redis, claim);
         localOutcome = settled ? 'released' : 'ownership-lost';
-      } catch {
-        localOutcome = 'retained-without-send';
-      }
-    } else {
-      try {
-        settled = await finalizePingerCooldown(redis, claim);
-        localOutcome = settled ? 'retained-without-send' : 'ownership-lost';
       } catch {
         localOutcome = 'retained-without-send';
       }
