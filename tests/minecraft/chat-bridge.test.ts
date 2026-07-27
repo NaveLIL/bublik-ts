@@ -198,3 +198,38 @@ test('chat polling never overlaps and backs off after failures', async (t) => {
   await Promise.resolve();
   assert.equal(calls, 3);
 });
+
+test('chat bridge removes listeners immediately and drains an in-flight poll on stop', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  const source = new FakeClient();
+  const client = source as unknown as Client;
+  let releasePoll: (() => void) | null = null;
+  const pollGate = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+
+  await startChatBridge(client, {
+    environment: validMinecraftEnvironment,
+    baseDelayMs: 10,
+    poll: async () => {
+      await pollGate;
+      return 'success';
+    },
+  });
+
+  t.mock.timers.tick(10);
+  await Promise.resolve();
+
+  let stopped = false;
+  const stopping = stopChatBridge().then(() => {
+    stopped = true;
+  });
+  assert.equal(source.listenerCount(Events.MessageCreate), 0);
+  await Promise.resolve();
+  assert.equal(stopped, false, 'stop must wait for the active poll to settle');
+
+  releasePoll?.();
+  await stopping;
+  assert.equal(stopped, true);
+});

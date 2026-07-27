@@ -55,6 +55,16 @@ const command: BublikCommand = {
       const embed = successEmbed(
         i18n.t('commands.reload.success', locale, { module: moduleName, time: String(elapsed) }),
       );
+      if (moduleName === 'minecraft') {
+        embed.addFields({
+          name: 'Minecraft / RCON',
+          value: locale === 'ru'
+            ? 'Модуль перезагружен с текущим окружением процесса. '
+              + 'После изменения `.env` перезапустите контейнер бота.'
+            : 'The module reloaded with the current process environment. '
+              + 'Restart the bot container after changing `.env`.',
+        });
+      }
       await interaction.editReply({ embeds: [embed] });
     } else {
       const embed = errorEmbed(
